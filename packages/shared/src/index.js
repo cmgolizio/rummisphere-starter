@@ -31,7 +31,8 @@ export const TILE_LOCATIONS = Object.freeze({
 export const CLIENT_EVENTS = Object.freeze({
   JOIN_ROOM: "room:join",
   MOVE_TILE: "tile:move",
-  COMMIT_BOARD: "board:commit",
+  COMMIT_TURN: "turn:commit",
+  RESET_TURN: "turn:reset",
 });
 
 export const SERVER_EVENTS = Object.freeze({

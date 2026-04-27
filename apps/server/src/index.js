@@ -2,10 +2,12 @@ import "dotenv/config";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
 import {
+  commitTurn,
   createDemoGameState,
   ensurePlayer,
   moveTile,
   publicStateForPlayer,
+  resetTurn,
   setPlayerConnected,
 } from "@rummisphere/game-engine";
 import {
@@ -83,28 +85,16 @@ io.on("connection", (socket) => {
     const room = rooms.get(roomId);
 
     if (!room) {
-      const error = {
-        ok: false,
-        reason: "Room does not exist.",
-      };
-
-      socket.emit(SERVER_EVENTS.MOVE_REJECTED, error);
-      ack?.(error);
-
+      reject(socket, ack, "Room does not exist.");
       return;
     }
 
     const result = moveTile(room, socket.id, payload);
 
     if (!result.ok) {
-      const error = {
-        ok: false,
-        reason: result.reason,
+      reject(socket, ack, result.reason, {
         tileId: payload.tileId,
-      };
-
-      socket.emit(SERVER_EVENTS.MOVE_REJECTED, error);
-      ack?.(error);
+      });
 
       return;
     }
@@ -115,6 +105,59 @@ io.on("connection", (socket) => {
     ack?.({
       ok: true,
       move: result.move,
+      version: result.state.version,
+    });
+  });
+
+  socket.on(CLIENT_EVENTS.COMMIT_TURN, (payload = {}, ack) => {
+    const roomId = payload.roomId || DEMO_ROOM_ID;
+    const room = rooms.get(roomId);
+
+    if (!room) {
+      reject(socket, ack, "Room does not exist.");
+      return;
+    }
+
+    const result = commitTurn(room, socket.id);
+
+    if (!result.ok) {
+      reject(socket, ack, result.reason, {
+        invalidGroups: result.invalidGroups || [],
+      });
+
+      return;
+    }
+
+    rooms.set(roomId, result.state);
+    emitRoomState(roomId, result.state);
+
+    ack?.({
+      ok: true,
+      version: result.state.version,
+    });
+  });
+
+  socket.on(CLIENT_EVENTS.RESET_TURN, (payload = {}, ack) => {
+    const roomId = payload.roomId || DEMO_ROOM_ID;
+    const room = rooms.get(roomId);
+
+    if (!room) {
+      reject(socket, ack, "Room does not exist.");
+      return;
+    }
+
+    const result = resetTurn(room, socket.id);
+
+    if (!result.ok) {
+      reject(socket, ack, result.reason);
+      return;
+    }
+
+    rooms.set(roomId, result.state);
+    emitRoomState(roomId, result.state);
+
+    ack?.({
+      ok: true,
       version: result.state.version,
     });
   });
@@ -166,4 +209,15 @@ function emitRoomState(roomId, state) {
       publicStateForPlayer(state, socketId),
     );
   }
+}
+
+function reject(socket, ack, reason, extra = {}) {
+  const payload = {
+    ok: false,
+    reason,
+    ...extra,
+  };
+
+  socket.emit(SERVER_EVENTS.MOVE_REJECTED, payload);
+  ack?.(payload);
 }

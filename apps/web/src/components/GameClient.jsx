@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import { io } from "socket.io-client";
 import {
   CLIENT_EVENTS,
@@ -14,8 +14,7 @@ const SOCKET_URL =
   process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
 
 export default function GameClient() {
-  const socketRef = useRef(null);
-
+  const socket = useGameStore((state) => state.socket);
   const connected = useGameStore((state) => state.connected);
   const playerId = useGameStore((state) => state.playerId);
   const room = useGameStore((state) => state.room);
@@ -29,17 +28,16 @@ export default function GameClient() {
   const clearError = useGameStore((state) => state.clearError);
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, {
+    const nextSocket = io(SOCKET_URL, {
       transports: ["websocket", "polling"],
     });
 
-    socketRef.current = socket;
-    setSocket(socket);
+    setSocket(nextSocket);
 
-    socket.on("connect", () => {
+    nextSocket.on("connect", () => {
       setConnected(true);
 
-      socket.emit(
+      nextSocket.emit(
         CLIENT_EVENTS.JOIN_ROOM,
         { roomId: DEMO_ROOM_ID },
         (response) => {
@@ -54,25 +52,24 @@ export default function GameClient() {
       );
     });
 
-    socket.on("disconnect", () => {
+    nextSocket.on("disconnect", () => {
       setConnected(false);
     });
 
-    socket.on(SERVER_EVENTS.ROOM_STATE, (nextRoom) => {
+    nextSocket.on(SERVER_EVENTS.ROOM_STATE, (nextRoom) => {
       setRoom(nextRoom);
     });
 
-    socket.on(SERVER_EVENTS.MOVE_REJECTED, (payload) => {
-      setError(payload.reason || "Move rejected.");
+    nextSocket.on(SERVER_EVENTS.MOVE_REJECTED, (payload) => {
+      setError(formatServerError(payload));
     });
 
-    socket.on(SERVER_EVENTS.SERVER_ERROR, (payload) => {
+    nextSocket.on(SERVER_EVENTS.SERVER_ERROR, (payload) => {
       setError(payload.reason || "Server error.");
     });
 
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
+      nextSocket.disconnect();
       setSocket(null);
     };
   }, [setConnected, setError, setPlayerId, setRoom, setSocket]);
@@ -81,10 +78,51 @@ export default function GameClient() {
     return room?.players?.find((player) => player.id === playerId) || null;
   }, [playerId, room]);
 
+  const currentTurnPlayer = useMemo(() => {
+    return (
+      room?.players?.find((player) => player.id === room.currentTurnPlayerId) ||
+      null
+    );
+  }, [room]);
+
+  const isYourTurn = room?.currentTurnPlayerId === playerId;
+
+  function handleEndTurn() {
+    clearError();
+
+    socket?.emit(
+      CLIENT_EVENTS.COMMIT_TURN,
+      {
+        roomId: DEMO_ROOM_ID,
+      },
+      (response) => {
+        if (!response?.ok) {
+          setError(formatServerError(response));
+        }
+      },
+    );
+  }
+
+  function handleResetTurn() {
+    clearError();
+
+    socket?.emit(
+      CLIENT_EVENTS.RESET_TURN,
+      {
+        roomId: DEMO_ROOM_ID,
+      },
+      (response) => {
+        if (!response?.ok) {
+          setError(response?.reason || "Could not reset turn.");
+        }
+      },
+    );
+  }
+
   return (
     <main className='min-h-screen bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 lg:px-8'>
       <div className='mx-auto flex max-w-7xl flex-col gap-5'>
-        <header className='flex flex-col gap-3 rounded-3xl border border-white/10 bg-white/[0.04] p-5 shadow-2xl shadow-black/30 sm:flex-row sm:items-end sm:justify-between'>
+        <header className='flex flex-col gap-4 rounded-3xl border border-white/10 bg-white/[0.04] p-5 shadow-2xl shadow-black/30 lg:flex-row lg:items-end lg:justify-between'>
           <div>
             <p className='text-sm uppercase tracking-[0.35em] text-cyan-300'>
               Rummisphere
@@ -95,28 +133,60 @@ export default function GameClient() {
             </h1>
 
             <p className='mt-2 max-w-2xl text-sm text-slate-300 sm:text-base'>
-              Custom pointer events, absolute-positioned tiles, grid snapping,
-              Socket.IO broadcasts, and server-validated moves.
+              Drag tiles during your turn. End turn only succeeds if the server
+              can validate every horizontal meld on the table.
             </p>
           </div>
 
-          <div className='rounded-2xl border border-white/10 bg-slate-900/80 p-4 text-sm text-slate-300'>
+          <div className='grid gap-3 rounded-2xl border border-white/10 bg-slate-900/80 p-4 text-sm text-slate-300 sm:grid-cols-2 lg:min-w-[420px]'>
             <div>
-              Status:{" "}
-              {connected ? (
-                <span className='text-emerald-300'>connected</span>
-              ) : (
-                <span className='text-rose-300'>offline</span>
-              )}
+              <div>
+                Status:{" "}
+                {connected ? (
+                  <span className='text-emerald-300'>connected</span>
+                ) : (
+                  <span className='text-rose-300'>offline</span>
+                )}
+              </div>
+
+              <div>Player: {currentPlayer?.name || "joining..."}</div>
+              <div>Room version: {room?.version || "—"}</div>
             </div>
 
-            <div>Player: {currentPlayer?.name || "joining..."}</div>
-            <div>Room version: {room?.version || "—"}</div>
+            <div>
+              <div>Turn: {room?.turnNumber || 1}</div>
+              <div>
+                Current turn:{" "}
+                <span className={isYourTurn ? "text-emerald-300" : ""}>
+                  {isYourTurn ? "You" : currentTurnPlayer?.name || "waiting..."}
+                </span>
+              </div>
+            </div>
+
+            <div className='flex gap-2 sm:col-span-2'>
+              <button
+                type='button'
+                disabled={!connected || !isYourTurn}
+                onClick={handleEndTurn}
+                className='rounded-xl bg-emerald-400 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-emerald-950/30 disabled:cursor-not-allowed disabled:opacity-40'
+              >
+                End Turn
+              </button>
+
+              <button
+                type='button'
+                disabled={!connected || !isYourTurn}
+                onClick={handleResetTurn}
+                className='rounded-xl border border-white/10 bg-white/10 px-4 py-2 font-bold text-white hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40'
+              >
+                Reset Turn
+              </button>
+            </div>
           </div>
         </header>
 
         {error ? (
-          <div className='flex items-center justify-between rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100'>
+          <div className='flex items-center justify-between gap-4 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100'>
             <span>{error}</span>
 
             <button
@@ -132,4 +202,25 @@ export default function GameClient() {
       </div>
     </main>
   );
+}
+
+function formatServerError(payload) {
+  if (!payload) return "Server rejected the action.";
+
+  if (
+    Array.isArray(payload.invalidGroups) &&
+    payload.invalidGroups.length > 0
+  ) {
+    const groups = payload.invalidGroups
+      .map((group) => {
+        return group.tiles
+          .map((tile) => `${tile.color} ${tile.number}`)
+          .join(", ");
+      })
+      .join(" | ");
+
+    return `${payload.reason || "Invalid table."} Problem group(s): ${groups}`;
+  }
+
+  return payload.reason || "Server rejected the action.";
 }
