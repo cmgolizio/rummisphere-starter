@@ -1,13 +1,19 @@
 {
   "name": "rummisphere-starter",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-time online multiplayer Rummikub starter: Next.js, custom pointer drag, Socket.IO, shared JS engine.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "concurrently -n web,server -c blue,green \"npm run dev --workspace apps/web\" \"npm run dev --workspace apps/server\"",
+    "dev:web": "npm run dev --workspace apps/web",
+    "dev:server": "npm run dev --workspace apps/server",
+    "start:server": "npm run start --workspace apps/server"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "devDependencies": {
+    "concurrently": "latest"
+  }
 }
