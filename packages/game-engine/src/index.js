@@ -6,6 +6,7 @@ import {
 } from "@rummisphere/shared";
 
 export const COLORS = ["red", "blue", "black", "orange"];
+export const INITIAL_MELD_MINIMUM = 30;
 
 export function createTile({
   id,
@@ -67,6 +68,7 @@ export function ensurePlayer(state, playerId, name = "Player") {
     id: playerId,
     name: `${name} ${state.players.length + 1}`,
     connected: true,
+    hasOpened: false,
   };
 
   const deal = dealRackTilesForPlayer(
@@ -115,7 +117,9 @@ export function setPlayerConnected(state, playerId, connected) {
 }
 
 export function moveTile(state, playerId, input) {
-  if (!state.players.some((player) => player.id === playerId)) {
+  const player = getPlayer(state, playerId);
+
+  if (!player) {
     return fail("Unknown player.");
   }
 
@@ -128,6 +132,8 @@ export function moveTile(state, playerId, input) {
   if (!tile) {
     return fail("Tile does not exist.");
   }
+
+  const snapshotTile = getSnapshotTile(state, tile.id);
 
   const targetZone =
     input.zone === TILE_LOCATIONS.RACK
@@ -143,6 +149,12 @@ export function moveTile(state, playerId, input) {
     tile.location === TILE_LOCATIONS.BOARD
   ) {
     return fail("Board tiles cannot be moved back into a rack.");
+  }
+
+  if (!player.hasOpened && snapshotTile?.location === TILE_LOCATIONS.BOARD) {
+    return fail(
+      "You must complete your initial 30-point meld before rearranging board tiles.",
+    );
   }
 
   const rawX = Number(input.x);
@@ -198,6 +210,12 @@ export function moveTile(state, playerId, input) {
 }
 
 export function commitTurn(state, playerId) {
+  const player = getPlayer(state, playerId);
+
+  if (!player) {
+    return fail("Unknown player.");
+  }
+
   if (state.currentTurnPlayerId !== playerId) {
     return fail("Not your turn.");
   }
@@ -220,10 +238,31 @@ export function commitTurn(state, playerId) {
     };
   }
 
+  if (!player.hasOpened) {
+    const openingValidation = validateInitialMeld(state, playerId, playedTiles);
+
+    if (!openingValidation.ok) {
+      return {
+        ok: false,
+        reason: openingValidation.reason,
+        openingPoints: openingValidation.points,
+        requiredPoints: INITIAL_MELD_MINIMUM,
+      };
+    }
+  }
+
   const nextPlayerId = getNextTurnPlayerId(state.players, playerId);
 
   const committedState = {
     ...state,
+    players: state.players.map((candidate) =>
+      candidate.id === playerId
+        ? {
+            ...candidate,
+            hasOpened: true,
+          }
+        : candidate,
+    ),
     lastError: null,
     version: state.version + 1,
     updatedAt: Date.now(),
@@ -460,6 +499,57 @@ export function isValidRun(tiles) {
   return gaps <= jokerCount;
 }
 
+function validateInitialMeld(state, playerId, playedTiles) {
+  const playedTileIds = new Set(playedTiles.map((tile) => tile.id));
+  const boardTiles = state.tiles.filter(
+    (tile) => tile.location === TILE_LOCATIONS.BOARD,
+  );
+  const melds = extractHorizontalMeldCandidates(boardTiles);
+
+  for (const meld of melds) {
+    const containsPlayedTile = meld.tiles.some((tile) =>
+      playedTileIds.has(tile.id),
+    );
+
+    if (!containsPlayedTile) continue;
+
+    const allTilesInMeldCameFromRackThisTurn = meld.tiles.every((tile) =>
+      playedTileIds.has(tile.id),
+    );
+
+    if (!allTilesInMeldCameFromRackThisTurn) {
+      return {
+        ok: false,
+        points: getTilesPointTotal(playedTiles),
+        reason:
+          "Your initial meld cannot use tiles that were already on the table.",
+      };
+    }
+  }
+
+  const points = getTilesPointTotal(playedTiles);
+
+  if (points < INITIAL_MELD_MINIMUM) {
+    return {
+      ok: false,
+      points,
+      reason: `Your initial meld must total at least ${INITIAL_MELD_MINIMUM} points. You played ${points}.`,
+    };
+  }
+
+  return {
+    ok: true,
+    points,
+  };
+}
+
+function getTilesPointTotal(tiles) {
+  return tiles.reduce((total, tile) => {
+    if (tile.joker) return total;
+    return total + Number(tile.number || 0);
+  }, 0);
+}
+
 function beginTurn(state, playerId, turnNumber) {
   return {
     ...state,
@@ -471,6 +561,14 @@ function beginTurn(state, playerId, turnNumber) {
     },
     updatedAt: Date.now(),
   };
+}
+
+function getPlayer(state, playerId) {
+  return state.players.find((player) => player.id === playerId) || null;
+}
+
+function getSnapshotTile(state, tileId) {
+  return state.turn?.snapshotTiles?.find((tile) => tile.id === tileId) || null;
 }
 
 function getNextTurnPlayerId(players, currentPlayerId) {

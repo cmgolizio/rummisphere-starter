@@ -86,6 +86,8 @@ export default function GameClient() {
   }, [room]);
 
   const isYourTurn = room?.currentTurnPlayerId === playerId;
+  const hasOpened = Boolean(currentPlayer?.hasOpened);
+  const needsInitialMeld = !hasOpened;
 
   function handleEndTurn() {
     clearError();
@@ -173,6 +175,14 @@ export default function GameClient() {
             <div>
               <div>Turn: {room?.turnNumber || 1}</div>
               <div>Pool: {room?.tilePoolCount ?? "—"} tiles</div>
+              <div>
+                Opened:{" "}
+                {hasOpened ? (
+                  <span className='text-emerald-300'>yes</span>
+                ) : (
+                  <span className='text-amber-300'>needs 30+</span>
+                )}
+              </div>
               <div>
                 Current turn:{" "}
                 <span className={isYourTurn ? "text-emerald-300" : ""}>
