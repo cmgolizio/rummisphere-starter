@@ -30,51 +30,14 @@ export function createTile({
 }
 
 export function createDemoGameState() {
-  const tiles = [
-    createTile({ id: "board-r-3", color: "red", number: 3, x: 56, y: 78 }),
-    createTile({ id: "board-r-4", color: "red", number: 4, x: 112, y: 78 }),
-    createTile({ id: "board-r-5", color: "red", number: 5, x: 168, y: 78 }),
-
-    createTile({ id: "board-b-7", color: "blue", number: 7, x: 56, y: 234 }),
-    createTile({ id: "board-k-7", color: "black", number: 7, x: 112, y: 234 }),
-    createTile({
-      id: "board-o-7",
-      color: "orange",
-      number: 7,
-      x: 168,
-      y: 234,
-    }),
-
-    createTile({
-      id: "board-b-10",
-      color: "blue",
-      number: 10,
-      x: 392,
-      y: 78,
-    }),
-    createTile({
-      id: "board-b-11",
-      color: "blue",
-      number: 11,
-      x: 448,
-      y: 78,
-    }),
-    createTile({
-      id: "board-b-12",
-      color: "blue",
-      number: 12,
-      x: 504,
-      y: 78,
-    }),
-  ];
-
   return {
     id: "demo-room",
     phase: "playing",
     version: 1,
     currentTurnPlayerId: null,
     players: [],
-    tiles,
+    tiles: [],
+    tilePool: createDemoTilePool(),
     turn: {
       number: 1,
       startedAt: null,
@@ -106,7 +69,11 @@ export function ensurePlayer(state, playerId, name = "Player") {
     connected: true,
   };
 
-  const rackTiles = createRackTilesForPlayer(playerId, state.players.length);
+  const deal = dealRackTilesForPlayer(
+    playerId,
+    state.players.length,
+    state.tilePool || [],
+  );
 
   const nextTurn =
     state.turn?.snapshotTiles && state.currentTurnPlayerId
@@ -114,7 +81,7 @@ export function ensurePlayer(state, playerId, name = "Player") {
           ...state.turn,
           snapshotTiles: [
             ...deepCloneTiles(state.turn.snapshotTiles),
-            ...deepCloneTiles(rackTiles),
+            ...deepCloneTiles(deal.rackTiles),
           ],
         }
       : state.turn;
@@ -122,7 +89,8 @@ export function ensurePlayer(state, playerId, name = "Player") {
   const nextState = {
     ...state,
     players: [...state.players, nextPlayer],
-    tiles: [...state.tiles, ...rackTiles],
+    tiles: [...state.tiles, ...deal.rackTiles],
+    tilePool: deal.remainingPool,
     turn: nextTurn,
     version: state.version + 1,
     updatedAt: Date.now(),
@@ -294,6 +262,51 @@ export function resetTurn(state, playerId) {
   };
 }
 
+export function drawAndPass(state, playerId) {
+  if (state.currentTurnPlayerId !== playerId) {
+    return fail("Not your turn.");
+  }
+
+  if (!Array.isArray(state.tilePool) || state.tilePool.length === 0) {
+    return fail("No tiles left to draw.");
+  }
+
+  const baseTiles = state.turn?.snapshotTiles
+    ? deepCloneTiles(state.turn.snapshotTiles)
+    : deepCloneTiles(state.tiles);
+
+  const [drawnTemplate, ...remainingPool] = state.tilePool;
+  const rackPosition = getNextRackPosition(baseTiles, playerId);
+
+  const drawnTile = createTile({
+    id: drawnTemplate.id,
+    color: drawnTemplate.color,
+    number: drawnTemplate.number,
+    joker: drawnTemplate.joker || false,
+    x: rackPosition.x,
+    y: rackPosition.y,
+    location: TILE_LOCATIONS.RACK,
+    ownerId: playerId,
+  });
+
+  const nextPlayerId = getNextTurnPlayerId(state.players, playerId);
+
+  const nextState = {
+    ...state,
+    tiles: [...baseTiles, drawnTile],
+    tilePool: remainingPool,
+    lastError: null,
+    version: state.version + 1,
+    updatedAt: Date.now(),
+  };
+
+  return {
+    ok: true,
+    state: beginTurn(nextState, nextPlayerId, (state.turn?.number || 1) + 1),
+    drawnTileId: drawnTile.id,
+  };
+}
+
 export function publicStateForPlayer(state, playerId) {
   const currentPlayer = state.players.find(
     (player) => player.id === state.currentTurnPlayerId,
@@ -319,6 +332,7 @@ export function publicStateForPlayer(state, playerId) {
           tile.location === TILE_LOCATIONS.RACK && tile.ownerId === player.id,
       ).length,
     })),
+    tilePoolCount: state.tilePool?.length || 0,
     lastError: state.lastError,
     updatedAt: state.updatedAt,
   };
@@ -446,26 +460,6 @@ export function isValidRun(tiles) {
   return gaps <= jokerCount;
 }
 
-function getTilesPlayedFromRackThisTurn(state, playerId) {
-  const snapshotTiles = state.turn?.snapshotTiles || [];
-
-  const snapshotById = new Map(snapshotTiles.map((tile) => [tile.id, tile]));
-
-  return state.tiles.filter((tile) => {
-    const snapshotTile = snapshotById.get(tile.id);
-
-    if (!snapshotTile) return false;
-
-    const startedInCurrentPlayerRack =
-      snapshotTile.location === TILE_LOCATIONS.RACK &&
-      snapshotTile.ownerId === playerId;
-
-    const isNowOnBoard = tile.location === TILE_LOCATIONS.BOARD;
-
-    return startedInCurrentPlayerRack && isNowOnBoard;
-  });
-}
-
 function beginTurn(state, playerId, turnNumber) {
   return {
     ...state,
@@ -499,44 +493,187 @@ function getNextTurnPlayerId(players, currentPlayerId) {
   return connectedPlayers[nextIndex].id;
 }
 
-function createRackTilesForPlayer(playerId, playerIndex) {
-  const rackSets = [
-    [
-      { color: "red", number: 1 },
-      { color: "blue", number: 2 },
-      { color: "black", number: 3 },
-      { color: "orange", number: 4 },
-      { color: "red", number: 8 },
-      { color: "blue", number: 8 },
-      { color: "black", number: 11 },
-    ],
-    [
-      { color: "orange", number: 1 },
-      { color: "black", number: 2 },
-      { color: "red", number: 6 },
-      { color: "blue", number: 6 },
-      { color: "orange", number: 9 },
-      { color: "black", number: 10 },
-      { color: "red", number: 13 },
-    ],
-  ];
+function getTilesPlayedFromRackThisTurn(state, playerId) {
+  const snapshotTiles = state.turn?.snapshotTiles || [];
 
-  const selectedSet = rackSets[playerIndex % rackSets.length];
+  const snapshotById = new Map(snapshotTiles.map((tile) => [tile.id, tile]));
 
-  return selectedSet.map((tile, index) => {
-    const x = BOARD.cellWidth * (index + 1);
-    const y = 624;
+  return state.tiles.filter((tile) => {
+    const snapshotTile = snapshotById.get(tile.id);
+
+    if (!snapshotTile) return false;
+
+    const startedInCurrentPlayerRack =
+      snapshotTile.location === TILE_LOCATIONS.RACK &&
+      snapshotTile.ownerId === playerId;
+
+    const isNowOnBoard = tile.location === TILE_LOCATIONS.BOARD;
+
+    return startedInCurrentPlayerRack && isNowOnBoard;
+  });
+}
+
+function createDemoTilePool() {
+  const pool = createFullTilePool();
+
+  return shuffleTilePool(pool, "rummisphere-demo-room");
+}
+
+function createFullTilePool() {
+  const pool = [];
+
+  for (const color of COLORS) {
+    for (let number = 1; number <= 13; number += 1) {
+      pool.push({
+        id: `${color}-${number}-a`,
+        color,
+        number,
+        joker: false,
+      });
+
+      pool.push({
+        id: `${color}-${number}-b`,
+        color,
+        number,
+        joker: false,
+      });
+    }
+  }
+
+  pool.push({
+    id: "joker-a",
+    color: "black",
+    number: null,
+    joker: true,
+  });
+
+  pool.push({
+    id: "joker-b",
+    color: "red",
+    number: null,
+    joker: true,
+  });
+
+  return pool;
+}
+
+function dealRackTilesForPlayer(playerId, playerIndex, tilePool) {
+  const remainingPool = [...tilePool];
+  const selectedTemplates = [];
+
+  const starterPlan = getStarterRackPlan(playerIndex);
+
+  for (const wantedTile of starterPlan) {
+    const template = takeTileFromPool(remainingPool, wantedTile);
+
+    if (template) {
+      selectedTemplates.push(template);
+    }
+  }
+
+  while (selectedTemplates.length < 14 && remainingPool.length > 0) {
+    selectedTemplates.push(remainingPool.shift());
+  }
+
+  const rackTiles = selectedTemplates.map((template, index) => {
+    const position = getRackPositionByIndex(index);
 
     return createTile({
-      id: `${playerId}-rack-${index}`,
-      color: tile.color,
-      number: tile.number,
-      x: Math.min(x, RACK.x + RACK.width - BOARD.tileWidth),
-      y,
+      id: template.id,
+      color: template.color,
+      number: template.number,
+      joker: template.joker || false,
+      x: position.x,
+      y: position.y,
       location: TILE_LOCATIONS.RACK,
       ownerId: playerId,
     });
   });
+
+  return {
+    rackTiles,
+    remainingPool,
+  };
+}
+
+function getStarterRackPlan(playerIndex) {
+  const starterPlans = [
+    [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+      { color: "blue", number: 8 },
+      { color: "black", number: 8 },
+      { color: "orange", number: 8 },
+    ],
+    [
+      { color: "blue", number: 10 },
+      { color: "blue", number: 11 },
+      { color: "blue", number: 12 },
+      { color: "red", number: 7 },
+      { color: "black", number: 7 },
+      { color: "orange", number: 7 },
+    ],
+  ];
+
+  return starterPlans[playerIndex % starterPlans.length];
+}
+
+function takeTileFromPool(pool, wantedTile) {
+  const index = pool.findIndex((tile) => {
+    if (wantedTile.joker) return tile.joker;
+
+    return (
+      !tile.joker &&
+      tile.color === wantedTile.color &&
+      tile.number === wantedTile.number
+    );
+  });
+
+  if (index === -1) return null;
+
+  const [template] = pool.splice(index, 1);
+
+  return template;
+}
+
+function getNextRackPosition(tiles, playerId) {
+  const occupied = new Set(
+    tiles
+      .filter(
+        (tile) =>
+          tile.location === TILE_LOCATIONS.RACK && tile.ownerId === playerId,
+      )
+      .map((tile) => `${tile.x}:${tile.y}`),
+  );
+
+  const maxSlots = getRackColumnCount() * 2;
+
+  for (let index = 0; index < maxSlots; index += 1) {
+    const position = getRackPositionByIndex(index);
+    const key = `${position.x}:${position.y}`;
+
+    if (!occupied.has(key)) {
+      return position;
+    }
+  }
+
+  return getRackPositionByIndex(maxSlots - 1);
+}
+
+function getRackPositionByIndex(index) {
+  const columnCount = getRackColumnCount();
+  const column = index % columnCount;
+  const row = Math.floor(index / columnCount);
+
+  return {
+    x: BOARD.cellWidth * (column + 1),
+    y: RACK.y + row * BOARD.cellHeight,
+  };
+}
+
+function getRackColumnCount() {
+  return Math.floor((RACK.width - BOARD.tileWidth) / BOARD.cellWidth);
 }
 
 function pushMeldCandidate(melds, tiles, y) {
@@ -550,6 +687,41 @@ function pushMeldCandidate(melds, tiles, y) {
 
 function deepCloneTiles(tiles) {
   return tiles.map((tile) => ({ ...tile }));
+}
+
+function shuffleTilePool(pool, seedText) {
+  const shuffled = [...pool];
+  const random = seededRandom(seedText);
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    const temp = shuffled[index];
+
+    shuffled[index] = shuffled[swapIndex];
+    shuffled[swapIndex] = temp;
+  }
+
+  return shuffled;
+}
+
+function seededRandom(seedText) {
+  let seed = 0;
+
+  for (let index = 0; index < seedText.length; index += 1) {
+    seed = Math.imul(31, seed) + seedText.charCodeAt(index);
+    seed |= 0;
+  }
+
+  return function random() {
+    seed = Math.imul(seed + 0x6d2b79f5, 1);
+    let value = seed;
+
+    value ^= value >>> 15;
+    value = Math.imul(value, value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 function fail(reason) {

@@ -119,6 +119,22 @@ export default function GameClient() {
     );
   }
 
+  function handleDrawAndPass() {
+    clearError();
+
+    socket?.emit(
+      CLIENT_EVENTS.DRAW_AND_PASS,
+      {
+        roomId: DEMO_ROOM_ID,
+      },
+      (response) => {
+        if (!response?.ok) {
+          setError(response?.reason || "Could not draw tile.");
+        }
+      },
+    );
+  }
+
   return (
     <main className='min-h-screen bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 lg:px-8'>
       <div className='mx-auto flex max-w-7xl flex-col gap-5'>
@@ -134,11 +150,12 @@ export default function GameClient() {
 
             <p className='mt-2 max-w-2xl text-sm text-slate-300 sm:text-base'>
               Drag tiles during your turn. End turn only succeeds if the server
-              can validate every horizontal meld on the table.
+              can validate every horizontal meld on the table. If you cannot
+              play, draw and pass.
             </p>
           </div>
 
-          <div className='grid gap-3 rounded-2xl border border-white/10 bg-slate-900/80 p-4 text-sm text-slate-300 sm:grid-cols-2 lg:min-w-[420px]'>
+          <div className='grid gap-3 rounded-2xl border border-white/10 bg-slate-900/80 p-4 text-sm text-slate-300 sm:grid-cols-2 lg:min-w-[460px]'>
             <div>
               <div>
                 Status:{" "}
@@ -155,6 +172,7 @@ export default function GameClient() {
 
             <div>
               <div>Turn: {room?.turnNumber || 1}</div>
+              <div>Pool: {room?.tilePoolCount ?? "—"} tiles</div>
               <div>
                 Current turn:{" "}
                 <span className={isYourTurn ? "text-emerald-300" : ""}>
@@ -163,7 +181,7 @@ export default function GameClient() {
               </div>
             </div>
 
-            <div className='flex gap-2 sm:col-span-2'>
+            <div className='flex flex-wrap gap-2 sm:col-span-2'>
               <button
                 type='button'
                 disabled={!connected || !isYourTurn}
@@ -171,6 +189,15 @@ export default function GameClient() {
                 className='rounded-xl bg-emerald-400 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-emerald-950/30 disabled:cursor-not-allowed disabled:opacity-40'
               >
                 End Turn
+              </button>
+
+              <button
+                type='button'
+                disabled={!connected || !isYourTurn}
+                onClick={handleDrawAndPass}
+                className='rounded-xl bg-cyan-300 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40'
+              >
+                Draw & Pass
               </button>
 
               <button
@@ -214,7 +241,7 @@ function formatServerError(payload) {
     const groups = payload.invalidGroups
       .map((group) => {
         return group.tiles
-          .map((tile) => `${tile.color} ${tile.number}`)
+          .map((tile) => `${tile.color} ${tile.joker ? "joker" : tile.number}`)
           .join(", ");
       })
       .join(" | ");

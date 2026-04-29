@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import {
   commitTurn,
   createDemoGameState,
+  drawAndPass,
   ensurePlayer,
   moveTile,
   publicStateForPlayer,
@@ -158,6 +159,32 @@ io.on("connection", (socket) => {
 
     ack?.({
       ok: true,
+      version: result.state.version,
+    });
+  });
+
+  socket.on(CLIENT_EVENTS.DRAW_AND_PASS, (payload = {}, ack) => {
+    const roomId = payload.roomId || DEMO_ROOM_ID;
+    const room = rooms.get(roomId);
+
+    if (!room) {
+      reject(socket, ack, "Room does not exist.");
+      return;
+    }
+
+    const result = drawAndPass(room, socket.id);
+
+    if (!result.ok) {
+      reject(socket, ack, result.reason);
+      return;
+    }
+
+    rooms.set(roomId, result.state);
+    emitRoomState(roomId, result.state);
+
+    ack?.({
+      ok: true,
+      drawnTileId: result.drawnTileId,
       version: result.state.version,
     });
   });

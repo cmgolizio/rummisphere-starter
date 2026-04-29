@@ -2,7 +2,7 @@ export const DEMO_ROOM_ID = "demo-room";
 
 export const BOARD = Object.freeze({
   width: 1200,
-  height: 720,
+  height: 800,
   cellWidth: 56,
   cellHeight: 78,
   tileWidth: 48,
@@ -13,14 +13,14 @@ export const TABLE = Object.freeze({
   x: 0,
   y: 0,
   width: 1200,
-  height: 536,
+  height: 614,
 });
 
 export const RACK = Object.freeze({
   x: 28,
-  y: 600,
+  y: 624,
   width: 1144,
-  height: 96,
+  height: 146,
 });
 
 export const TILE_LOCATIONS = Object.freeze({
@@ -33,6 +33,7 @@ export const CLIENT_EVENTS = Object.freeze({
   MOVE_TILE: "tile:move",
   COMMIT_TURN: "turn:commit",
   RESET_TURN: "turn:reset",
+  DRAW_AND_PASS: "turn:draw-and-pass",
 });
 
 export const SERVER_EVENTS = Object.freeze({
