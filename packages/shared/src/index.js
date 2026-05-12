@@ -34,6 +34,7 @@ export const CLIENT_EVENTS = Object.freeze({
   COMMIT_TURN: "turn:commit",
   RESET_TURN: "turn:reset",
   DRAW_AND_PASS: "turn:draw-and-pass",
+  REQUEST_REMATCH: "match:request-rematch",
 });
 
 export const SERVER_EVENTS = Object.freeze({

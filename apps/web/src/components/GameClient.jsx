@@ -138,6 +138,22 @@ export default function GameClient() {
     );
   }
 
+  function handleRematch() {
+    clearError();
+
+    socket?.emit(
+      CLIENT_EVENTS.REQUEST_REMATCH,
+      {
+        roomId: DEMO_ROOM_ID,
+      },
+      (response) => {
+        if (!response?.ok) {
+          setError(response?.reason || "Could not start rematch.");
+        }
+      },
+    );
+  }
+
   return (
     <main className='min-h-screen bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 lg:px-8'>
       <div className='mx-auto flex max-w-7xl flex-col gap-5'>
@@ -238,9 +254,20 @@ export default function GameClient() {
 
         {isGameOver ? (
           <section className='rounded-3xl border border-amber-300/30 bg-amber-300/10 p-5 shadow-2xl shadow-black/30'>
-            <h2 className='text-2xl font-black text-amber-100'>
-              Game over — {room?.winnerName || "Unknown player"} wins
-            </h2>
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+              <h2 className='text-2xl font-black text-amber-100'>
+                Game over — {room?.winnerName || "Unknown player"} wins
+              </h2>
+
+              <button
+                type='button'
+                disabled={!connected}
+                onClick={handleRematch}
+                className='rounded-xl bg-amber-300 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-black/20 disabled:cursor-not-allowed disabled:opacity-40'
+              >
+                Rematch
+              </button>
+            </div>
 
             <div className='mt-4 overflow-hidden rounded-2xl border border-white/10'>
               <table className='w-full text-left text-sm'>

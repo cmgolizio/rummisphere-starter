@@ -5,6 +5,7 @@ import {
   drawAndPass,
   ensurePlayer,
   moveTile,
+  requestRematch,
   resetTurn,
   validateTable,
 } from "../src/index.js";
@@ -293,5 +294,62 @@ describe("game engine", () => {
 
     expect(moveResult.ok).toBe(false);
     expect(moveResult.reason).toMatch(/game is already over/i);
+  });
+  test("rematch is rejected before the game is finished", () => {
+    const state = createTwoPlayerState();
+
+    const result = requestRematch(state, "p1");
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/only start after the game is finished/i);
+  });
+
+  test("rematch after finished game resets the room with same connected players", () => {
+    let state = createTwoPlayerState();
+
+    const red3 = getTile(state, "p1", "red", 3);
+    const red4 = getTile(state, "p1", "red", 4);
+    const red5 = getTile(state, "p1", "red", 5);
+
+    state = stripP1RackToOnly(state, [red3, red4, red5]);
+
+    state = playTile(state, "p1", red3, 56, 78);
+    state = playTile(state, "p1", red4, 112, 78);
+    state = playTile(state, "p1", red5, 168, 78);
+
+    const commit = commitTurn(state, "p1");
+
+    expect(commit.ok).toBe(true);
+    expect(commit.state.phase).toBe("finished");
+
+    const rematch = requestRematch(commit.state, "p2");
+
+    expect(rematch.ok).toBe(true);
+    expect(rematch.state.phase).toBe("playing");
+    expect(rematch.state.winnerId).toBe(null);
+    expect(rematch.state.finalScores).toBe(null);
+    expect(rematch.state.currentTurnPlayerId).toBe("p2");
+
+    const p1 = rematch.state.players.find((player) => player.id === "p1");
+    const p2 = rematch.state.players.find((player) => player.id === "p2");
+
+    expect(p1.hasOpened).toBe(false);
+    expect(p2.hasOpened).toBe(false);
+
+    const boardTiles = rematch.state.tiles.filter(
+      (tile) => tile.location === TILE_LOCATIONS.BOARD,
+    );
+
+    const p1Rack = rematch.state.tiles.filter(
+      (tile) => tile.ownerId === "p1" && tile.location === TILE_LOCATIONS.RACK,
+    );
+
+    const p2Rack = rematch.state.tiles.filter(
+      (tile) => tile.ownerId === "p2" && tile.location === TILE_LOCATIONS.RACK,
+    );
+
+    expect(boardTiles).toHaveLength(0);
+    expect(p1Rack).toHaveLength(14);
+    expect(p2Rack).toHaveLength(14);
   });
 });

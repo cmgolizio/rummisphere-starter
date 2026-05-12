@@ -373,6 +373,23 @@ export function drawAndPass(state, playerId) {
   };
 }
 
+export function requestRematch(state, playerId) {
+  const player = getPlayer(state, playerId);
+
+  if (!player) {
+    return fail("Unknown player.");
+  }
+
+  if (state.phase !== "finished") {
+    return fail("A rematch can only start after the game is finished.");
+  }
+
+  return {
+    ok: true,
+    state: createFreshGameWithExistingPlayers(state, playerId),
+  };
+}
+
 export function publicStateForPlayer(state, playerId) {
   const currentPlayer = state.players.find(
     (player) => player.id === state.currentTurnPlayerId,
@@ -899,6 +916,67 @@ function calculateFinalScores(state, winnerId) {
       isWinner,
     };
   });
+}
+
+function createFreshGameWithExistingPlayers(previousState, firstPlayerId) {
+  const connectedPlayers = previousState.players.filter(
+    (player) => player.connected,
+  );
+
+  const playersToKeep =
+    connectedPlayers.length > 0 ? connectedPlayers : previousState.players;
+
+  let tilePool = createDemoTilePool();
+  let tiles = [];
+
+  const players = playersToKeep.map((player, index) => {
+    const deal = dealRackTilesForPlayer(player.id, index, tilePool);
+
+    tilePool = deal.remainingPool;
+    tiles = [...tiles, ...deal.rackTiles];
+
+    return {
+      id: player.id,
+      name: player.name,
+      connected: player.connected,
+      hasOpened: false,
+    };
+  });
+
+  const requestedFirstPlayer = players.find(
+    (player) => player.id === firstPlayerId && player.connected,
+  );
+
+  const firstConnectedPlayer = players.find((player) => player.connected);
+  const firstPlayer =
+    requestedFirstPlayer || firstConnectedPlayer || players[0];
+
+  const freshState = {
+    id: previousState.id,
+    phase: "playing",
+    winnerId: null,
+    winnerName: null,
+    finishedAt: null,
+    finalScores: null,
+    version: previousState.version + 1,
+    currentTurnPlayerId: null,
+    players,
+    tiles,
+    tilePool,
+    turn: {
+      number: 1,
+      startedAt: null,
+      snapshotTiles: null,
+    },
+    lastError: null,
+    updatedAt: Date.now(),
+  };
+
+  if (!firstPlayer) {
+    return freshState;
+  }
+
+  return beginTurn(freshState, firstPlayer.id, 1);
 }
 
 function getRackTilesForPlayer(state, playerId) {
