@@ -34,6 +34,10 @@ export function createDemoGameState() {
   return {
     id: "demo-room",
     phase: "playing",
+    winnerId: null,
+    winnerName: null,
+    finishedAt: null,
+    finalScores: null,
     version: 1,
     currentTurnPlayerId: null,
     players: [],
@@ -121,6 +125,10 @@ export function moveTile(state, playerId, input) {
 
   if (!player) {
     return fail("Unknown player.");
+  }
+
+  if (state.phase !== "playing") {
+    return fail("Game is already over.");
   }
 
   if (state.currentTurnPlayerId !== playerId) {
@@ -216,6 +224,10 @@ export function commitTurn(state, playerId) {
     return fail("Unknown player.");
   }
 
+  if (state.phase !== "playing") {
+    return fail("Game is already over.");
+  }
+
   if (state.currentTurnPlayerId !== playerId) {
     return fail("Not your turn.");
   }
@@ -251,8 +263,6 @@ export function commitTurn(state, playerId) {
     }
   }
 
-  const nextPlayerId = getNextTurnPlayerId(state.players, playerId);
-
   const committedState = {
     ...state,
     players: state.players.map((candidate) =>
@@ -268,6 +278,17 @@ export function commitTurn(state, playerId) {
     updatedAt: Date.now(),
   };
 
+  const currentPlayerRack = getRackTilesForPlayer(committedState, playerId);
+
+  if (currentPlayerRack.length === 0) {
+    return {
+      ok: true,
+      state: finishGame(committedState, playerId),
+    };
+  }
+
+  const nextPlayerId = getNextTurnPlayerId(committedState.players, playerId);
+
   return {
     ok: true,
     state: beginTurn(
@@ -279,6 +300,9 @@ export function commitTurn(state, playerId) {
 }
 
 export function resetTurn(state, playerId) {
+  if (state.phase !== "playing") {
+    return fail("Game is already over.");
+  }
   if (state.currentTurnPlayerId !== playerId) {
     return fail("Not your turn.");
   }
@@ -302,6 +326,9 @@ export function resetTurn(state, playerId) {
 }
 
 export function drawAndPass(state, playerId) {
+  if (state.phase !== "playing") {
+    return fail("Game is already over.");
+  }
   if (state.currentTurnPlayerId !== playerId) {
     return fail("Not your turn.");
   }
@@ -354,6 +381,10 @@ export function publicStateForPlayer(state, playerId) {
   return {
     id: state.id,
     phase: state.phase,
+    winnerId: state.winnerId,
+    winnerName: state.winnerName,
+    finishedAt: state.finishedAt,
+    finalScores: state.finalScores,
     version: state.version,
     currentTurnPlayerId: state.currentTurnPlayerId,
     currentTurnPlayerName: currentPlayer?.name || null,
@@ -820,6 +851,67 @@ function seededRandom(seedText) {
 
     return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+function finishGame(state, winnerId) {
+  const winner = getPlayer(state, winnerId);
+  const finalScores = calculateFinalScores(state, winnerId);
+
+  return {
+    ...state,
+    phase: "finished",
+    winnerId,
+    winnerName: winner?.name || "Unknown player",
+    finalScores,
+    currentTurnPlayerId: null,
+    turn: {
+      ...state.turn,
+      snapshotTiles: deepCloneTiles(state.tiles),
+    },
+    finishedAt: Date.now(),
+    version: state.version + 1,
+    updatedAt: Date.now(),
+  };
+}
+
+function calculateFinalScores(state, winnerId) {
+  const penalties = state.players.map((player) => {
+    const rackTiles = getRackTilesForPlayer(state, player.id);
+    const rackPoints = getTilesPenaltyTotal(rackTiles);
+
+    return {
+      playerId: player.id,
+      playerName: player.name,
+      rackPoints,
+    };
+  });
+
+  const winnerScore = penalties
+    .filter((entry) => entry.playerId !== winnerId)
+    .reduce((total, entry) => total + entry.rackPoints, 0);
+
+  return penalties.map((entry) => {
+    const isWinner = entry.playerId === winnerId;
+
+    return {
+      ...entry,
+      score: isWinner ? winnerScore : -entry.rackPoints,
+      isWinner,
+    };
+  });
+}
+
+function getRackTilesForPlayer(state, playerId) {
+  return state.tiles.filter((tile) => {
+    return tile.location === TILE_LOCATIONS.RACK && tile.ownerId === playerId;
+  });
+}
+
+function getTilesPenaltyTotal(tiles) {
+  return tiles.reduce((total, tile) => {
+    if (tile.joker) return total + 30;
+    return total + Number(tile.number || 0);
+  }, 0);
 }
 
 function fail(reason) {

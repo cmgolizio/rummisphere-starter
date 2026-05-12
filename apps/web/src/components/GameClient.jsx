@@ -86,6 +86,7 @@ export default function GameClient() {
   }, [room]);
 
   const isYourTurn = room?.currentTurnPlayerId === playerId;
+  const isGameOver = room?.phase === "finished";
   const hasOpened = Boolean(currentPlayer?.hasOpened);
   const needsInitialMeld = !hasOpened;
 
@@ -194,7 +195,7 @@ export default function GameClient() {
             <div className='flex flex-wrap gap-2 sm:col-span-2'>
               <button
                 type='button'
-                disabled={!connected || !isYourTurn}
+                disabled={!connected || !isYourTurn || isGameOver}
                 onClick={handleEndTurn}
                 className='rounded-xl bg-emerald-400 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-emerald-950/30 disabled:cursor-not-allowed disabled:opacity-40'
               >
@@ -212,7 +213,7 @@ export default function GameClient() {
 
               <button
                 type='button'
-                disabled={!connected || !isYourTurn}
+                disabled={!connected || !isYourTurn || isGameOver}
                 onClick={handleResetTurn}
                 className='rounded-xl border border-white/10 bg-white/10 px-4 py-2 font-bold text-white hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40'
               >
@@ -233,6 +234,56 @@ export default function GameClient() {
               Dismiss
             </button>
           </div>
+        ) : null}
+
+        {isGameOver ? (
+          <section className='rounded-3xl border border-amber-300/30 bg-amber-300/10 p-5 shadow-2xl shadow-black/30'>
+            <h2 className='text-2xl font-black text-amber-100'>
+              Game over — {room?.winnerName || "Unknown player"} wins
+            </h2>
+
+            <div className='mt-4 overflow-hidden rounded-2xl border border-white/10'>
+              <table className='w-full text-left text-sm'>
+                <thead className='bg-white/10 text-slate-300'>
+                  <tr>
+                    <th className='px-4 py-3'>Player</th>
+                    <th className='px-4 py-3'>Rack Points</th>
+                    <th className='px-4 py-3'>Score</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {(room?.finalScores || []).map((entry) => (
+                    <tr
+                      key={entry.playerId}
+                      className='border-t border-white/10'
+                    >
+                      <td className='px-4 py-3'>
+                        {entry.playerName}
+                        {entry.isWinner ? (
+                          <span className='ml-2 rounded-full bg-emerald-400 px-2 py-0.5 text-xs font-bold text-slate-950'>
+                            winner
+                          </span>
+                        ) : null}
+                      </td>
+
+                      <td className='px-4 py-3'>{entry.rackPoints}</td>
+
+                      <td
+                        className={`px-4 py-3 font-bold ${
+                          entry.score >= 0
+                            ? "text-emerald-300"
+                            : "text-rose-300"
+                        }`}
+                      >
+                        {entry.score}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
         ) : null}
 
         <GameBoard />

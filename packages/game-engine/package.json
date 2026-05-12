@@ -7,6 +7,10 @@
   "exports": {
     ".": "./src/index.js"
   },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
   "dependencies": {
     "@rummisphere/shared": "0.1.0"
   }

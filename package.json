@@ -11,9 +11,12 @@
     "dev": "concurrently -n web,server -c blue,green \"npm run dev --workspace apps/web\" \"npm run dev --workspace apps/server\"",
     "dev:web": "npm run dev --workspace apps/web",
     "dev:server": "npm run dev --workspace apps/server",
-    "start:server": "npm run start --workspace apps/server"
+    "start:server": "npm run start --workspace apps/server",
+    "test": "npm run test:engine",
+    "test:engine": "npm run test --workspace packages/game-engine"
   },
   "devDependencies": {
-    "concurrently": "latest"
+    "concurrently": "latest",
+    "vitest": "latest"
   }
 }

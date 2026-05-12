@@ -100,6 +100,8 @@ export default function GameBoard() {
 
   function handleTilePointerDown(event, tile) {
     if (event.button !== 0) return;
+    if (!room?.isYourTurn) return;
+    if (room?.phase !== "playing") return;
 
     event.preventDefault();
 
