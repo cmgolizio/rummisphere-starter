@@ -7,6 +7,8 @@ import {
 
 export const COLORS = ["red", "blue", "black", "orange"];
 export const INITIAL_MELD_MINIMUM = 30;
+export const MIN_PLAYERS = 2;
+export const MAX_PLAYERS = 4;
 
 export function createTile({
   id,
@@ -30,10 +32,35 @@ export function createTile({
   };
 }
 
+export function createWaitingRoomState(roomId) {
+  return {
+    id: roomId,
+    phase: "waiting",
+    hostPlayerId: null,
+    winnerId: null,
+    winnerName: null,
+    finishedAt: null,
+    finalScores: null,
+    version: 1,
+    currentTurnPlayerId: null,
+    players: [],
+    tiles: [],
+    tilePool: [],
+    turn: {
+      number: 1,
+      startedAt: null,
+      snapshotTiles: null,
+    },
+    lastError: null,
+    updatedAt: Date.now(),
+  };
+}
+
 export function createDemoGameState() {
   return {
     id: "demo-room",
     phase: "playing",
+    hostPlayerId: null,
     winnerId: null,
     winnerName: null,
     finishedAt: null,
@@ -56,6 +83,10 @@ export function createDemoGameState() {
 export function ensurePlayer(state, playerId, name = "Player") {
   if (!playerId) return state;
 
+  if (state.phase === "waiting") {
+    return ensureWaitingRoomPlayer(state, playerId, name);
+  }
+
   const existing = state.players.find((player) => player.id === playerId);
 
   if (existing) {
@@ -72,6 +103,7 @@ export function ensurePlayer(state, playerId, name = "Player") {
     id: playerId,
     name: `${name} ${state.players.length + 1}`,
     connected: true,
+    ready: false,
     hasOpened: false,
   };
 
@@ -109,12 +141,147 @@ export function ensurePlayer(state, playerId, name = "Player") {
   return nextState;
 }
 
+export function setPlayerReady(state, playerId, ready) {
+  if (state.phase !== "waiting") {
+    return fail("Ready state can only be changed in the waiting room.");
+  }
+
+  const player = getPlayer(state, playerId);
+
+  if (!player) {
+    return fail("Unknown player.");
+  }
+
+  if (!player.connected) {
+    return fail("Disconnected players cannot ready up.");
+  }
+
+  return {
+    ok: true,
+    state: {
+      ...state,
+      players: state.players.map((candidate) =>
+        candidate.id === playerId
+          ? {
+              ...candidate,
+              ready: Boolean(ready),
+            }
+          : candidate,
+      ),
+      version: state.version + 1,
+      updatedAt: Date.now(),
+    },
+  };
+}
+
+export function startGame(state, playerId) {
+  if (state.phase !== "waiting") {
+    return fail("Game has already started.");
+  }
+
+  if (state.hostPlayerId !== playerId) {
+    return fail("Only the host can start the game.");
+  }
+
+  const connectedPlayers = state.players.filter((player) => player.connected);
+
+  if (connectedPlayers.length < MIN_PLAYERS) {
+    return fail(`At least ${MIN_PLAYERS} players are required to start.`);
+  }
+
+  if (connectedPlayers.length > MAX_PLAYERS) {
+    return fail(`No more than ${MAX_PLAYERS} players can play.`);
+  }
+
+  const unreadyPlayers = connectedPlayers.filter((player) => !player.ready);
+
+  if (unreadyPlayers.length > 0) {
+    return fail("All connected players must be ready before starting.");
+  }
+
+  const hostIndex = connectedPlayers.findIndex(
+    (player) => player.id === state.hostPlayerId,
+  );
+
+  const orderedPlayers =
+    hostIndex > 0
+      ? [
+          ...connectedPlayers.slice(hostIndex),
+          ...connectedPlayers.slice(0, hostIndex),
+        ]
+      : connectedPlayers;
+
+  let tilePool = createDemoTilePool();
+  let tiles = [];
+
+  const players = orderedPlayers.map((player, index) => {
+    const deal = dealRackTilesForPlayer(player.id, index, tilePool);
+
+    tilePool = deal.remainingPool;
+    tiles = [...tiles, ...deal.rackTiles];
+
+    return {
+      id: player.id,
+      name: player.name,
+      connected: true,
+      ready: false,
+      hasOpened: false,
+    };
+  });
+
+  const nextState = {
+    ...state,
+    phase: "playing",
+    winnerId: null,
+    winnerName: null,
+    finishedAt: null,
+    finalScores: null,
+    players,
+    tiles,
+    tilePool,
+    currentTurnPlayerId: null,
+    turn: {
+      number: 1,
+      startedAt: null,
+      snapshotTiles: null,
+    },
+    lastError: null,
+    version: state.version + 1,
+    updatedAt: Date.now(),
+  };
+
+  return {
+    ok: true,
+    state: beginTurn(nextState, players[0].id, 1),
+  };
+}
+
 export function setPlayerConnected(state, playerId, connected) {
+  const players = state.players.map((player) =>
+    player.id === playerId
+      ? {
+          ...player,
+          connected,
+          ready: connected ? player.ready : false,
+        }
+      : player,
+  );
+
+  let hostPlayerId = state.hostPlayerId;
+
+  if (state.phase === "waiting") {
+    const currentHost = players.find((player) => player.id === hostPlayerId);
+
+    if (!currentHost || !currentHost.connected) {
+      hostPlayerId =
+        players.find((player) => player.connected)?.id || hostPlayerId;
+    }
+  }
+
   return {
     ...state,
-    players: state.players.map((player) =>
-      player.id === playerId ? { ...player, connected } : player,
-    ),
+    hostPlayerId,
+    players,
     version: state.version + 1,
     updatedAt: Date.now(),
   };
@@ -128,7 +295,7 @@ export function moveTile(state, playerId, input) {
   }
 
   if (state.phase !== "playing") {
-    return fail("Game is already over.");
+    return fail("Game is not currently playing.");
   }
 
   if (state.currentTurnPlayerId !== playerId) {
@@ -225,7 +392,7 @@ export function commitTurn(state, playerId) {
   }
 
   if (state.phase !== "playing") {
-    return fail("Game is already over.");
+    return fail("Game is not currently playing.");
   }
 
   if (state.currentTurnPlayerId !== playerId) {
@@ -301,8 +468,9 @@ export function commitTurn(state, playerId) {
 
 export function resetTurn(state, playerId) {
   if (state.phase !== "playing") {
-    return fail("Game is already over.");
+    return fail("Game is not currently playing.");
   }
+
   if (state.currentTurnPlayerId !== playerId) {
     return fail("Not your turn.");
   }
@@ -327,8 +495,9 @@ export function resetTurn(state, playerId) {
 
 export function drawAndPass(state, playerId) {
   if (state.phase !== "playing") {
-    return fail("Game is already over.");
+    return fail("Game is not currently playing.");
   }
+
   if (state.currentTurnPlayerId !== playerId) {
     return fail("Not your turn.");
   }
@@ -398,6 +567,7 @@ export function publicStateForPlayer(state, playerId) {
   return {
     id: state.id,
     phase: state.phase,
+    hostPlayerId: state.hostPlayerId,
     winnerId: state.winnerId,
     winnerName: state.winnerName,
     finishedAt: state.finishedAt,
@@ -545,6 +715,43 @@ export function isValidRun(tiles) {
   const jokerCount = tiles.length - nonJokers.length;
 
   return gaps <= jokerCount;
+}
+
+function ensureWaitingRoomPlayer(state, playerId, name) {
+  const existing = state.players.find((player) => player.id === playerId);
+
+  if (existing) {
+    return {
+      ...state,
+      players: state.players.map((player) =>
+        player.id === playerId
+          ? {
+              ...player,
+              connected: true,
+            }
+          : player,
+      ),
+      updatedAt: Date.now(),
+    };
+  }
+
+  const isFirstPlayer = state.players.length === 0;
+
+  const nextPlayer = {
+    id: playerId,
+    name: `${name} ${state.players.length + 1}`,
+    connected: true,
+    ready: false,
+    hasOpened: false,
+  };
+
+  return {
+    ...state,
+    hostPlayerId: state.hostPlayerId || (isFirstPlayer ? playerId : null),
+    players: [...state.players, nextPlayer],
+    version: state.version + 1,
+    updatedAt: Date.now(),
+  };
 }
 
 function validateInitialMeld(state, playerId, playedTiles) {
@@ -822,54 +1029,6 @@ function getRackColumnCount() {
   return Math.floor((RACK.width - BOARD.tileWidth) / BOARD.cellWidth);
 }
 
-function pushMeldCandidate(melds, tiles, y) {
-  if (!tiles.length) return;
-
-  melds.push({
-    y,
-    tiles,
-  });
-}
-
-function deepCloneTiles(tiles) {
-  return tiles.map((tile) => ({ ...tile }));
-}
-
-function shuffleTilePool(pool, seedText) {
-  const shuffled = [...pool];
-  const random = seededRandom(seedText);
-
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    const temp = shuffled[index];
-
-    shuffled[index] = shuffled[swapIndex];
-    shuffled[swapIndex] = temp;
-  }
-
-  return shuffled;
-}
-
-function seededRandom(seedText) {
-  let seed = 0;
-
-  for (let index = 0; index < seedText.length; index += 1) {
-    seed = Math.imul(31, seed) + seedText.charCodeAt(index);
-    seed |= 0;
-  }
-
-  return function random() {
-    seed = Math.imul(seed + 0x6d2b79f5, 1);
-    let value = seed;
-
-    value ^= value >>> 15;
-    value = Math.imul(value, value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function finishGame(state, winnerId) {
   const winner = getPlayer(state, winnerId);
   const finalScores = calculateFinalScores(state, winnerId);
@@ -939,6 +1098,7 @@ function createFreshGameWithExistingPlayers(previousState, firstPlayerId) {
       id: player.id,
       name: player.name,
       connected: player.connected,
+      ready: false,
       hasOpened: false,
     };
   });
@@ -954,6 +1114,7 @@ function createFreshGameWithExistingPlayers(previousState, firstPlayerId) {
   const freshState = {
     id: previousState.id,
     phase: "playing",
+    hostPlayerId: previousState.hostPlayerId,
     winnerId: null,
     winnerName: null,
     finishedAt: null,
@@ -990,6 +1151,54 @@ function getTilesPenaltyTotal(tiles) {
     if (tile.joker) return total + 30;
     return total + Number(tile.number || 0);
   }, 0);
+}
+
+function pushMeldCandidate(melds, tiles, y) {
+  if (!tiles.length) return;
+
+  melds.push({
+    y,
+    tiles,
+  });
+}
+
+function deepCloneTiles(tiles) {
+  return tiles.map((tile) => ({ ...tile }));
+}
+
+function shuffleTilePool(pool, seedText) {
+  const shuffled = [...pool];
+  const random = seededRandom(seedText);
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    const temp = shuffled[index];
+
+    shuffled[index] = shuffled[swapIndex];
+    shuffled[swapIndex] = temp;
+  }
+
+  return shuffled;
+}
+
+function seededRandom(seedText) {
+  let seed = 0;
+
+  for (let index = 0; index < seedText.length; index += 1) {
+    seed = Math.imul(31, seed) + seedText.charCodeAt(index);
+    seed |= 0;
+  }
+
+  return function random() {
+    seed = Math.imul(seed + 0x6d2b79f5, 1);
+    let value = seed;
+
+    value ^= value >>> 15;
+    value = Math.imul(value, value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 function fail(reason) {

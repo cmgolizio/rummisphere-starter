@@ -2,11 +2,14 @@ import { describe, expect, test } from "vitest";
 import {
   commitTurn,
   createDemoGameState,
+  createWaitingRoomState,
   drawAndPass,
   ensurePlayer,
   moveTile,
   requestRematch,
   resetTurn,
+  setPlayerReady,
+  startGame,
   validateTable,
 } from "../src/index.js";
 import { TILE_LOCATIONS } from "@rummisphere/shared";
@@ -293,7 +296,8 @@ describe("game engine", () => {
     });
 
     expect(moveResult.ok).toBe(false);
-    expect(moveResult.reason).toMatch(/game is already over/i);
+    // expect(moveResult.reason).toMatch(/game is already over/i);
+    expect(moveResult.reason).toMatch(/not currently playing/i);
   });
   test("rematch is rejected before the game is finished", () => {
     const state = createTwoPlayerState();
@@ -351,5 +355,85 @@ describe("game engine", () => {
     expect(boardTiles).toHaveLength(0);
     expect(p1Rack).toHaveLength(14);
     expect(p2Rack).toHaveLength(14);
+  });
+  test("waiting room adds players without dealing rack tiles", () => {
+    let state = createWaitingRoomState("ABCDE");
+
+    state = ensurePlayer(state, "p1");
+    state = ensurePlayer(state, "p2");
+
+    expect(state.phase).toBe("waiting");
+    expect(state.hostPlayerId).toBe("p1");
+    expect(state.players).toHaveLength(2);
+    expect(state.tiles).toHaveLength(0);
+    expect(state.tilePool).toHaveLength(0);
+  });
+
+  test("host cannot start waiting room with fewer than two players", () => {
+    let state = createWaitingRoomState("ABCDE");
+
+    state = ensurePlayer(state, "p1");
+
+    const ready = setPlayerReady(state, "p1", true);
+
+    expect(ready.ok).toBe(true);
+
+    const result = startGame(ready.state, "p1");
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/at least 2 players/i);
+  });
+
+  test("non-host cannot start the game", () => {
+    let state = createWaitingRoomState("ABCDE");
+
+    state = ensurePlayer(state, "p1");
+    state = ensurePlayer(state, "p2");
+
+    let ready = setPlayerReady(state, "p1", true);
+    expect(ready.ok).toBe(true);
+
+    ready = setPlayerReady(ready.state, "p2", true);
+    expect(ready.ok).toBe(true);
+
+    const result = startGame(ready.state, "p2");
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/only the host/i);
+  });
+
+  test("host can start game when two connected players are ready", () => {
+    let state = createWaitingRoomState("ABCDE");
+
+    state = ensurePlayer(state, "p1");
+    state = ensurePlayer(state, "p2");
+
+    let ready = setPlayerReady(state, "p1", true);
+    expect(ready.ok).toBe(true);
+
+    ready = setPlayerReady(ready.state, "p2", true);
+    expect(ready.ok).toBe(true);
+
+    const result = startGame(ready.state, "p1");
+
+    expect(result.ok).toBe(true);
+    expect(result.state.phase).toBe("playing");
+    expect(result.state.currentTurnPlayerId).toBe("p1");
+
+    const p1Rack = result.state.tiles.filter(
+      (tile) => tile.ownerId === "p1" && tile.location === TILE_LOCATIONS.RACK,
+    );
+
+    const p2Rack = result.state.tiles.filter(
+      (tile) => tile.ownerId === "p2" && tile.location === TILE_LOCATIONS.RACK,
+    );
+
+    const boardTiles = result.state.tiles.filter(
+      (tile) => tile.location === TILE_LOCATIONS.BOARD,
+    );
+
+    expect(p1Rack).toHaveLength(14);
+    expect(p2Rack).toHaveLength(14);
+    expect(boardTiles).toHaveLength(0);
   });
 });

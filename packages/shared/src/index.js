@@ -29,7 +29,11 @@ export const TILE_LOCATIONS = Object.freeze({
 });
 
 export const CLIENT_EVENTS = Object.freeze({
+  CREATE_ROOM: "room:create",
   JOIN_ROOM: "room:join",
+  SET_READY: "room:set-ready",
+  START_GAME: "game:start",
+
   MOVE_TILE: "tile:move",
   COMMIT_TURN: "turn:commit",
   RESET_TURN: "turn:reset",

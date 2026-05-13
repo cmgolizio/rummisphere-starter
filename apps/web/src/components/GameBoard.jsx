@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef } from "react";
 import {
   BOARD,
   CLIENT_EVENTS,
-  DEMO_ROOM_ID,
   RACK,
   TABLE,
   TILE_LOCATIONS,
@@ -71,7 +70,7 @@ export default function GameBoard() {
       socket?.emit(
         CLIENT_EVENTS.MOVE_TILE,
         {
-          roomId: DEMO_ROOM_ID,
+          roomId: room?.id,
           tileId: drag.tileId,
           x: snapped.x,
           y: snapped.y,
