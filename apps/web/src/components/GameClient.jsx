@@ -5,12 +5,20 @@ import { io } from "socket.io-client";
 import { CLIENT_EVENTS, SERVER_EVENTS } from "@rummisphere/shared";
 import { useGameStore } from "../lib/useGameStore";
 import GameBoard from "./GameBoard";
+import {
+  getLastRoomId,
+  getOrCreateClientIdentity,
+  saveClientDisplayName,
+  saveLastRoomId,
+} from "../lib/clientIdentity";
 
 const SOCKET_URL =
   process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
 
 export default function GameClient() {
   const [joinCode, setJoinCode] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [lastRoomId, setLastRoomId] = useState("");
 
   const socket = useGameStore((state) => state.socket);
   const connected = useGameStore((state) => state.connected);
@@ -24,6 +32,18 @@ export default function GameClient() {
   const setRoom = useGameStore((state) => state.setRoom);
   const setError = useGameStore((state) => state.setError);
   const clearError = useGameStore((state) => state.clearError);
+
+  useEffect(() => {
+    const identity = getOrCreateClientIdentity();
+    const savedRoomId = getLastRoomId();
+
+    setDisplayName(identity.displayName);
+    setLastRoomId(savedRoomId);
+
+    if (savedRoomId) {
+      setJoinCode(savedRoomId);
+    }
+  }, []);
 
   useEffect(() => {
     const nextSocket = io(SOCKET_URL, {
@@ -82,42 +102,73 @@ export default function GameClient() {
     connectedPlayers.length <= 4 &&
     connectedPlayers.every((player) => player.ready);
 
+  function getIdentityPayload() {
+    const identity = getOrCreateClientIdentity(displayName);
+
+    saveClientDisplayName(identity.displayName);
+    setDisplayName(identity.displayName);
+
+    return {
+      clientId: identity.clientId,
+      displayName: identity.displayName,
+    };
+  }
+
   function handleCreateRoom() {
     clearError();
 
-    socket?.emit(CLIENT_EVENTS.CREATE_ROOM, {}, (response) => {
+    const identity = getIdentityPayload();
+
+    socket?.emit(CLIENT_EVENTS.CREATE_ROOM, identity, (response) => {
       if (!response?.ok) {
         setError(response?.reason || "Could not create room.");
         return;
       }
 
+      saveLastRoomId(response.roomId);
+      setLastRoomId(response.roomId);
+      setJoinCode(response.roomId);
+
       setPlayerId(response.playerId);
       setRoom(response.state);
-      setJoinCode(response.roomId);
     });
   }
 
-  function handleJoinRoom(event) {
+  function handleJoinRoom(event, explicitRoomId = null) {
     event?.preventDefault();
     clearError();
 
-    const roomId = joinCode.trim().toUpperCase();
+    const roomId = String(explicitRoomId || joinCode)
+      .trim()
+      .toUpperCase();
 
     if (!roomId) {
       setError("Enter a room code.");
       return;
     }
 
-    socket?.emit(CLIENT_EVENTS.JOIN_ROOM, { roomId }, (response) => {
-      if (!response?.ok) {
-        setError(response?.reason || "Could not join room.");
-        return;
-      }
+    const identity = getIdentityPayload();
 
-      setPlayerId(response.playerId);
-      setRoom(response.state);
-      setJoinCode(response.roomId);
-    });
+    socket?.emit(
+      CLIENT_EVENTS.JOIN_ROOM,
+      {
+        ...identity,
+        roomId,
+      },
+      (response) => {
+        if (!response?.ok) {
+          setError(response?.reason || "Could not join room.");
+          return;
+        }
+
+        saveLastRoomId(response.roomId);
+        setLastRoomId(response.roomId);
+        setJoinCode(response.roomId);
+
+        setPlayerId(response.playerId);
+        setRoom(response.state);
+      },
+    );
   }
 
   function handleReadyToggle() {
@@ -245,7 +296,30 @@ export default function GameClient() {
           </header>
 
           {error ? <ErrorBox error={error} onDismiss={clearError} /> : null}
+          <section className='rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-2xl shadow-black/30'>
+            <label className='block text-sm font-bold uppercase tracking-[0.25em] text-slate-400'>
+              Display name
+            </label>
 
+            <input
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              placeholder='Player'
+              maxLength={24}
+              className='mt-3 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-lg font-bold text-white outline-none focus:border-cyan-300'
+            />
+
+            {lastRoomId ? (
+              <button
+                type='button'
+                disabled={!connected}
+                onClick={() => handleJoinRoom(null, lastRoomId)}
+                className='mt-3 rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 font-bold text-cyan-100 hover:bg-cyan-300/15 disabled:cursor-not-allowed disabled:opacity-40'
+              >
+                Rejoin last room: {lastRoomId}
+              </button>
+            ) : null}
+          </section>
           <section className='grid gap-4 rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-2xl shadow-black/30 sm:grid-cols-2'>
             <div className='rounded-2xl border border-white/10 bg-white/[0.04] p-5'>
               <h2 className='text-xl font-black'>Create room</h2>

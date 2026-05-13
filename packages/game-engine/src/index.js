@@ -80,7 +80,7 @@ export function createDemoGameState() {
   };
 }
 
-export function ensurePlayer(state, playerId, name = "Player") {
+export function ensurePlayer(state, playerId, name = null) {
   if (!playerId) return state;
 
   if (state.phase === "waiting") {
@@ -101,7 +101,7 @@ export function ensurePlayer(state, playerId, name = "Player") {
 
   const nextPlayer = {
     id: playerId,
-    name: `${name} ${state.players.length + 1}`,
+    name: createPlayerName(name, state.players.length),
     connected: true,
     ready: false,
     hasOpened: false,
@@ -739,7 +739,7 @@ function ensureWaitingRoomPlayer(state, playerId, name) {
 
   const nextPlayer = {
     id: playerId,
-    name: `${name} ${state.players.length + 1}`,
+    name: createPlayerName(name, state.players.length),
     connected: true,
     ready: false,
     hasOpened: false,
@@ -1199,6 +1199,15 @@ function seededRandom(seedText) {
 
     return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+function createPlayerName(name, playerIndex) {
+  const cleanName = String(name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 24);
+
+  return cleanName || `Player ${playerIndex + 1}`;
 }
 
 function fail(reason) {

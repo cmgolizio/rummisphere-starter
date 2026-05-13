@@ -58,10 +58,16 @@ const rooms = new Map();
 io.on("connection", (socket) => {
   console.log(`[socket] connected ${socket.id}`);
 
-  socket.on(CLIENT_EVENTS.CREATE_ROOM, (_payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.CREATE_ROOM, (payload = {}, ack) => {
+    const identity = resolvePlayerIdentity(socket, payload);
+
     const roomId = generateUniqueRoomCode();
     const room = createWaitingRoomState(roomId);
-    const nextRoom = ensurePlayer(room, socket.id);
+    const nextRoom = ensurePlayer(
+      room,
+      identity.playerId,
+      identity.displayName,
+    );
 
     rooms.set(roomId, nextRoom);
     joinSocketRoom(socket, roomId);
@@ -70,13 +76,14 @@ io.on("connection", (socket) => {
 
     ack?.({
       ok: true,
-      playerId: socket.id,
+      playerId: identity.playerId,
       roomId,
-      state: publicStateForPlayer(nextRoom, socket.id),
+      state: publicStateForPlayer(nextRoom, identity.playerId),
     });
   });
 
   socket.on(CLIENT_EVENTS.JOIN_ROOM, (payload = {}, ack) => {
+    const identity = resolvePlayerIdentity(socket, payload);
     const roomId = normalizeRoomCode(payload.roomId);
     const room = rooms.get(roomId);
 
@@ -86,7 +93,7 @@ io.on("connection", (socket) => {
     }
 
     const existingPlayer = room.players.find(
-      (player) => player.id === socket.id,
+      (player) => player.id === identity.playerId,
     );
 
     if (!existingPlayer && room.phase !== "waiting") {
@@ -101,7 +108,11 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const nextRoom = ensurePlayer(room, socket.id);
+    const nextRoom = ensurePlayer(
+      room,
+      identity.playerId,
+      identity.displayName,
+    );
 
     rooms.set(roomId, nextRoom);
     joinSocketRoom(socket, roomId);
@@ -110,22 +121,23 @@ io.on("connection", (socket) => {
 
     ack?.({
       ok: true,
-      playerId: socket.id,
+      playerId: identity.playerId,
       roomId,
-      state: publicStateForPlayer(nextRoom, socket.id),
+      state: publicStateForPlayer(nextRoom, identity.playerId),
     });
   });
 
   socket.on(CLIENT_EVENTS.SET_READY, (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
     const room = rooms.get(roomId);
+    const playerId = getSocketPlayerId(socket);
 
     if (!room) {
       reject(socket, ack, "Room does not exist.");
       return;
     }
 
-    const result = setPlayerReady(room, socket.id, payload.ready);
+    const result = setPlayerReady(room, playerId, payload.ready);
 
     if (!result.ok) {
       reject(socket, ack, result.reason);
@@ -144,13 +156,14 @@ io.on("connection", (socket) => {
   socket.on(CLIENT_EVENTS.START_GAME, (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
     const room = rooms.get(roomId);
+    const playerId = getSocketPlayerId(socket);
 
     if (!room) {
       reject(socket, ack, "Room does not exist.");
       return;
     }
 
-    const result = startGame(room, socket.id);
+    const result = startGame(room, playerId);
 
     if (!result.ok) {
       reject(socket, ack, result.reason);
@@ -169,13 +182,14 @@ io.on("connection", (socket) => {
   socket.on(CLIENT_EVENTS.MOVE_TILE, (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
     const room = rooms.get(roomId);
+    const playerId = getSocketPlayerId(socket);
 
     if (!room) {
       reject(socket, ack, "Room does not exist.");
       return;
     }
 
-    const result = moveTile(room, socket.id, payload);
+    const result = moveTile(room, playerId, payload);
 
     if (!result.ok) {
       reject(socket, ack, result.reason, {
@@ -198,13 +212,14 @@ io.on("connection", (socket) => {
   socket.on(CLIENT_EVENTS.COMMIT_TURN, (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
     const room = rooms.get(roomId);
+    const playerId = getSocketPlayerId(socket);
 
     if (!room) {
       reject(socket, ack, "Room does not exist.");
       return;
     }
 
-    const result = commitTurn(room, socket.id);
+    const result = commitTurn(room, playerId);
 
     if (!result.ok) {
       reject(socket, ack, result.reason, {
@@ -226,13 +241,14 @@ io.on("connection", (socket) => {
   socket.on(CLIENT_EVENTS.RESET_TURN, (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
     const room = rooms.get(roomId);
+    const playerId = getSocketPlayerId(socket);
 
     if (!room) {
       reject(socket, ack, "Room does not exist.");
       return;
     }
 
-    const result = resetTurn(room, socket.id);
+    const result = resetTurn(room, playerId);
 
     if (!result.ok) {
       reject(socket, ack, result.reason);
@@ -251,13 +267,14 @@ io.on("connection", (socket) => {
   socket.on(CLIENT_EVENTS.DRAW_AND_PASS, (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
     const room = rooms.get(roomId);
+    const playerId = getSocketPlayerId(socket);
 
     if (!room) {
       reject(socket, ack, "Room does not exist.");
       return;
     }
 
-    const result = drawAndPass(room, socket.id);
+    const result = drawAndPass(room, playerId);
 
     if (!result.ok) {
       reject(socket, ack, result.reason);
@@ -277,13 +294,14 @@ io.on("connection", (socket) => {
   socket.on(CLIENT_EVENTS.REQUEST_REMATCH, (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
     const room = rooms.get(roomId);
+    const playerId = getSocketPlayerId(socket);
 
     if (!room) {
       reject(socket, ack, "Room does not exist.");
       return;
     }
 
-    const result = requestRematch(room, socket.id);
+    const result = requestRematch(room, playerId);
 
     if (!result.ok) {
       reject(socket, ack, result.reason);
@@ -300,12 +318,22 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    const playerId = getSocketPlayerId(socket);
+
     for (const [roomId, room] of rooms.entries()) {
-      const wasInRoom = room.players.some((player) => player.id === socket.id);
+      const wasInRoom = room.players.some((player) => player.id === playerId);
 
       if (!wasInRoom) continue;
 
-      const nextState = setPlayerConnected(room, socket.id, false);
+      const stillConnectedElsewhere = isPlayerConnectedInRoom(
+        roomId,
+        playerId,
+        socket.id,
+      );
+
+      if (stillConnectedElsewhere) continue;
+
+      const nextState = setPlayerConnected(room, playerId, false);
 
       rooms.set(roomId, nextState);
       emitRoomState(roomId, nextState);
@@ -330,9 +358,11 @@ function emitRoomState(roomId, state) {
 
     if (!targetSocket) continue;
 
+    const playerId = getSocketPlayerId(targetSocket);
+
     targetSocket.emit(
       SERVER_EVENTS.ROOM_STATE,
-      publicStateForPlayer(state, socketId),
+      publicStateForPlayer(state, playerId),
     );
   }
 }
@@ -363,6 +393,37 @@ function getActiveRoomId(socket, payload = {}) {
   return normalizeRoomCode(payload.roomId || socket.data.roomId);
 }
 
+function getSocketPlayerId(socket) {
+  return socket.data.playerId || socket.id;
+}
+
+function resolvePlayerIdentity(socket, payload = {}) {
+  const playerId = sanitizePlayerId(payload.clientId) || socket.id;
+  const displayName = sanitizeDisplayName(payload.displayName) || "Player";
+
+  socket.data.playerId = playerId;
+  socket.data.displayName = displayName;
+
+  return {
+    playerId,
+    displayName,
+  };
+}
+
+function sanitizePlayerId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 80);
+}
+
+function sanitizeDisplayName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 24);
+}
+
 function normalizeRoomCode(roomId) {
   return String(roomId || "")
     .trim()
@@ -388,4 +449,25 @@ function generateRoomCode() {
   }
 
   return code;
+}
+
+function isPlayerConnectedInRoom(roomId, playerId, excludingSocketId) {
+  const socketIds = io.sockets.adapter.rooms.get(roomId);
+
+  if (!socketIds) return false;
+
+  for (const socketId of socketIds) {
+    if (socketId === excludingSocketId) continue;
+
+    const socket = io.sockets.sockets.get(socketId);
+
+    if (!socket) continue;
+    if (!socket.connected) continue;
+
+    if (getSocketPlayerId(socket) === playerId) {
+      return true;
+    }
+  }
+
+  return false;
 }
