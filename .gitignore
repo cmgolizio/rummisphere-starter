@@ -2,5 +2,7 @@ node_modules
 .next
 .env
 .env.local
+apps/server/.env
+apps/web/.env.local
 .DS_Store
 npm-debug.log*

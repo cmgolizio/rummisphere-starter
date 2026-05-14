@@ -15,6 +15,12 @@ import {
   startGame,
 } from "@rummisphere/game-engine";
 import { CLIENT_EVENTS, SERVER_EVENTS } from "@rummisphere/shared";
+import {
+  isPersistenceEnabled,
+  loadRoomState,
+  logMatchMove,
+  saveRoomState,
+} from "./lib/persistence.js";
 
 const PORT = Number(process.env.PORT || 4000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:3000";
@@ -28,6 +34,7 @@ const httpServer = createServer((req, res) => {
     res.end(
       JSON.stringify({
         ok: true,
+        persistence: isPersistenceEnabled() ? "enabled" : "disabled",
       }),
     );
 
@@ -58,10 +65,10 @@ const rooms = new Map();
 io.on("connection", (socket) => {
   console.log(`[socket] connected ${socket.id}`);
 
-  socket.on(CLIENT_EVENTS.CREATE_ROOM, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.CREATE_ROOM, async (payload = {}, ack) => {
     const identity = resolvePlayerIdentity(socket, payload);
 
-    const roomId = generateUniqueRoomCode();
+    const roomId = await generateUniqueRoomCode();
     const room = createWaitingRoomState(roomId);
     const nextRoom = ensurePlayer(
       room,
@@ -71,6 +78,17 @@ io.on("connection", (socket) => {
 
     rooms.set(roomId, nextRoom);
     joinSocketRoom(socket, roomId);
+
+    await saveRoomState(nextRoom);
+    await logMatchMove({
+      roomId,
+      playerId: identity.playerId,
+      moveType: "room:create",
+      payload: {
+        displayName: identity.displayName,
+      },
+      resultingVersion: nextRoom.version,
+    });
 
     emitRoomState(roomId, nextRoom);
 
@@ -82,10 +100,10 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on(CLIENT_EVENTS.JOIN_ROOM, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.JOIN_ROOM, async (payload = {}, ack) => {
     const identity = resolvePlayerIdentity(socket, payload);
     const roomId = normalizeRoomCode(payload.roomId);
-    const room = rooms.get(roomId);
+    const room = await getRoomById(roomId);
 
     if (!room) {
       reject(socket, ack, "Room does not exist.");
@@ -117,6 +135,18 @@ io.on("connection", (socket) => {
     rooms.set(roomId, nextRoom);
     joinSocketRoom(socket, roomId);
 
+    await saveRoomState(nextRoom);
+    await logMatchMove({
+      roomId,
+      playerId: identity.playerId,
+      moveType: "room:join",
+      payload: {
+        displayName: identity.displayName,
+        existingPlayer: Boolean(existingPlayer),
+      },
+      resultingVersion: nextRoom.version,
+    });
+
     emitRoomState(roomId, nextRoom);
 
     ack?.({
@@ -127,9 +157,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on(CLIENT_EVENTS.SET_READY, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.SET_READY, async (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
-    const room = rooms.get(roomId);
+    const room = await getRoomById(roomId);
     const playerId = getSocketPlayerId(socket);
 
     if (!room) {
@@ -145,6 +175,18 @@ io.on("connection", (socket) => {
     }
 
     rooms.set(roomId, result.state);
+
+    await saveRoomState(result.state);
+    await logMatchMove({
+      roomId,
+      playerId,
+      moveType: "room:set-ready",
+      payload: {
+        ready: Boolean(payload.ready),
+      },
+      resultingVersion: result.state.version,
+    });
+
     emitRoomState(roomId, result.state);
 
     ack?.({
@@ -153,9 +195,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on(CLIENT_EVENTS.START_GAME, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.START_GAME, async (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
-    const room = rooms.get(roomId);
+    const room = await getRoomById(roomId);
     const playerId = getSocketPlayerId(socket);
 
     if (!room) {
@@ -171,6 +213,16 @@ io.on("connection", (socket) => {
     }
 
     rooms.set(roomId, result.state);
+
+    await saveRoomState(result.state);
+    await logMatchMove({
+      roomId,
+      playerId,
+      moveType: "game:start",
+      payload: {},
+      resultingVersion: result.state.version,
+    });
+
     emitRoomState(roomId, result.state);
 
     ack?.({
@@ -179,9 +231,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on(CLIENT_EVENTS.MOVE_TILE, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.MOVE_TILE, async (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
-    const room = rooms.get(roomId);
+    const room = await getRoomById(roomId);
     const playerId = getSocketPlayerId(socket);
 
     if (!room) {
@@ -200,6 +252,22 @@ io.on("connection", (socket) => {
     }
 
     rooms.set(roomId, result.state);
+
+    await saveRoomState(result.state);
+    await logMatchMove({
+      roomId,
+      playerId,
+      moveType: "tile:move",
+      payload: {
+        tileId: payload.tileId,
+        x: payload.x,
+        y: payload.y,
+        zone: payload.zone,
+        acceptedMove: result.move,
+      },
+      resultingVersion: result.state.version,
+    });
+
     emitRoomState(roomId, result.state);
 
     ack?.({
@@ -209,9 +277,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on(CLIENT_EVENTS.COMMIT_TURN, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.COMMIT_TURN, async (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
-    const room = rooms.get(roomId);
+    const room = await getRoomById(roomId);
     const playerId = getSocketPlayerId(socket);
 
     if (!room) {
@@ -230,6 +298,16 @@ io.on("connection", (socket) => {
     }
 
     rooms.set(roomId, result.state);
+
+    await saveRoomState(result.state);
+    await logMatchMove({
+      roomId,
+      playerId,
+      moveType: "turn:commit",
+      payload: {},
+      resultingVersion: result.state.version,
+    });
+
     emitRoomState(roomId, result.state);
 
     ack?.({
@@ -238,9 +316,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on(CLIENT_EVENTS.RESET_TURN, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.RESET_TURN, async (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
-    const room = rooms.get(roomId);
+    const room = await getRoomById(roomId);
     const playerId = getSocketPlayerId(socket);
 
     if (!room) {
@@ -256,6 +334,16 @@ io.on("connection", (socket) => {
     }
 
     rooms.set(roomId, result.state);
+
+    await saveRoomState(result.state);
+    await logMatchMove({
+      roomId,
+      playerId,
+      moveType: "turn:reset",
+      payload: {},
+      resultingVersion: result.state.version,
+    });
+
     emitRoomState(roomId, result.state);
 
     ack?.({
@@ -264,9 +352,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on(CLIENT_EVENTS.DRAW_AND_PASS, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.DRAW_AND_PASS, async (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
-    const room = rooms.get(roomId);
+    const room = await getRoomById(roomId);
     const playerId = getSocketPlayerId(socket);
 
     if (!room) {
@@ -282,6 +370,18 @@ io.on("connection", (socket) => {
     }
 
     rooms.set(roomId, result.state);
+
+    await saveRoomState(result.state);
+    await logMatchMove({
+      roomId,
+      playerId,
+      moveType: "turn:draw-and-pass",
+      payload: {
+        drawnTileId: result.drawnTileId,
+      },
+      resultingVersion: result.state.version,
+    });
+
     emitRoomState(roomId, result.state);
 
     ack?.({
@@ -291,9 +391,9 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on(CLIENT_EVENTS.REQUEST_REMATCH, (payload = {}, ack) => {
+  socket.on(CLIENT_EVENTS.REQUEST_REMATCH, async (payload = {}, ack) => {
     const roomId = getActiveRoomId(socket, payload);
-    const room = rooms.get(roomId);
+    const room = await getRoomById(roomId);
     const playerId = getSocketPlayerId(socket);
 
     if (!room) {
@@ -309,6 +409,16 @@ io.on("connection", (socket) => {
     }
 
     rooms.set(roomId, result.state);
+
+    await saveRoomState(result.state);
+    await logMatchMove({
+      roomId,
+      playerId,
+      moveType: "match:request-rematch",
+      payload: {},
+      resultingVersion: result.state.version,
+    });
+
     emitRoomState(roomId, result.state);
 
     ack?.({
@@ -317,7 +427,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     const playerId = getSocketPlayerId(socket);
 
     for (const [roomId, room] of rooms.entries()) {
@@ -336,6 +446,16 @@ io.on("connection", (socket) => {
       const nextState = setPlayerConnected(room, playerId, false);
 
       rooms.set(roomId, nextState);
+
+      await saveRoomState(nextState);
+      await logMatchMove({
+        roomId,
+        playerId,
+        moveType: "player:disconnect",
+        payload: {},
+        resultingVersion: nextState.version,
+      });
+
       emitRoomState(roomId, nextState);
     }
 
@@ -346,7 +466,28 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`[server] Socket.IO listening on http://localhost:${PORT}`);
   console.log(`[server] Allowing web origin: ${WEB_ORIGIN}`);
+  console.log(
+    `[server] Persistence: ${isPersistenceEnabled() ? "enabled" : "disabled"}`,
+  );
 });
+
+async function getRoomById(roomId) {
+  const normalizedRoomId = normalizeRoomCode(roomId);
+
+  if (!normalizedRoomId) return null;
+
+  const cachedRoom = rooms.get(normalizedRoomId);
+
+  if (cachedRoom) return cachedRoom;
+
+  const savedRoom = await loadRoomState(normalizedRoomId);
+
+  if (!savedRoom) return null;
+
+  rooms.set(normalizedRoomId, savedRoom);
+
+  return savedRoom;
+}
 
 function emitRoomState(roomId, state) {
   const socketIds = io.sockets.adapter.rooms.get(roomId);
@@ -430,10 +571,10 @@ function normalizeRoomCode(roomId) {
     .toUpperCase();
 }
 
-function generateUniqueRoomCode() {
+async function generateUniqueRoomCode() {
   let code = generateRoomCode();
 
-  while (rooms.has(code)) {
+  while (rooms.has(code) || (await loadRoomState(code))) {
     code = generateRoomCode();
   }
 
