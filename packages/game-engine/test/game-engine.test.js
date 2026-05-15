@@ -5,6 +5,7 @@ import {
   createWaitingRoomState,
   drawAndPass,
   ensurePlayer,
+  leaveRoom,
   moveTile,
   requestRematch,
   resetTurn,
@@ -53,6 +54,49 @@ function playTile(state, playerId, tile, x, y) {
   }
 
   return result.state;
+}
+
+function setPlayerRackToSpecs(state, playerId, specs) {
+  const rackTiles = state.tiles.filter(
+    (tile) =>
+      tile.ownerId === playerId && tile.location === TILE_LOCATIONS.RACK,
+  );
+
+  return {
+    ...state,
+    tiles: state.tiles.map((tile) => {
+      const rackIndex = rackTiles.findIndex(
+        (rackTile) => rackTile.id === tile.id,
+      );
+
+      if (rackIndex === -1 || !specs[rackIndex]) return tile;
+
+      return {
+        ...tile,
+        color: specs[rackIndex].color,
+        number: specs[rackIndex].number,
+        joker: Boolean(specs[rackIndex].joker),
+      };
+    }),
+    turn: state.turn?.snapshotTiles
+      ? {
+          ...state.turn,
+          snapshotTiles: state.turn.snapshotTiles.map((tile) => {
+            const rackIndex = rackTiles.findIndex(
+              (rackTile) => rackTile.id === tile.id,
+            );
+            if (rackIndex === -1 || !specs[rackIndex]) return tile;
+
+            return {
+              ...tile,
+              color: specs[rackIndex].color,
+              number: specs[rackIndex].number,
+              joker: Boolean(specs[rackIndex].joker),
+            };
+          }),
+        }
+      : state.turn,
+  };
 }
 
 function playP1OpeningMelds(state) {
@@ -133,6 +177,20 @@ describe("game engine", () => {
   test("initial meld under 30 points is rejected", () => {
     let state = createTwoPlayerState();
 
+    state = setPlayerRackToSpecs(state, "p1", [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+      { color: "blue", number: 8 },
+      { color: "black", number: 8 },
+      { color: "orange", number: 8 },
+    ]);
+    state = setPlayerRackToSpecs(state, "p2", [
+      { color: "blue", number: 10 },
+      { color: "blue", number: 11 },
+      { color: "blue", number: 12 },
+    ]);
+
     const red3 = getTile(state, "p1", "red", 3);
     const red4 = getTile(state, "p1", "red", 4);
     const red5 = getTile(state, "p1", "red", 5);
@@ -150,6 +208,20 @@ describe("game engine", () => {
 
   test("valid initial meld totaling at least 30 points opens player", () => {
     let state = createTwoPlayerState();
+
+    state = setPlayerRackToSpecs(state, "p1", [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+      { color: "blue", number: 8 },
+      { color: "black", number: 8 },
+      { color: "orange", number: 8 },
+    ]);
+    state = setPlayerRackToSpecs(state, "p2", [
+      { color: "blue", number: 10 },
+      { color: "blue", number: 11 },
+      { color: "blue", number: 12 },
+    ]);
 
     state = playP1OpeningMelds(state);
 
@@ -169,6 +241,20 @@ describe("game engine", () => {
 
   test("player who has not opened cannot move existing board tiles", () => {
     let state = createTwoPlayerState();
+
+    state = setPlayerRackToSpecs(state, "p1", [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+      { color: "blue", number: 8 },
+      { color: "black", number: 8 },
+      { color: "orange", number: 8 },
+    ]);
+    state = setPlayerRackToSpecs(state, "p2", [
+      { color: "blue", number: 10 },
+      { color: "blue", number: 11 },
+      { color: "blue", number: 12 },
+    ]);
 
     state = playP1OpeningMelds(state);
 
@@ -218,6 +304,19 @@ describe("game engine", () => {
   test("reset turn restores the turn-start tile snapshot", () => {
     let state = createTwoPlayerState();
 
+    state = setPlayerRackToSpecs(state, "p1", [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+      { color: "blue", number: 8 },
+      { color: "black", number: 8 },
+      { color: "orange", number: 8 },
+    ]);
+    state = setPlayerRackToSpecs(state, "p2", [
+      { color: "blue", number: 10 },
+      { color: "blue", number: 11 },
+      { color: "blue", number: 12 },
+    ]);
     const red3 = getTile(state, "p1", "red", 3);
 
     state = playTile(state, "p1", red3, 56, 78);
@@ -238,6 +337,19 @@ describe("game engine", () => {
   test("emptying rack on a valid commit finishes the game", () => {
     let state = createTwoPlayerState();
 
+    state = setPlayerRackToSpecs(state, "p1", [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+      { color: "blue", number: 8 },
+      { color: "black", number: 8 },
+      { color: "orange", number: 8 },
+    ]);
+    state = setPlayerRackToSpecs(state, "p2", [
+      { color: "blue", number: 10 },
+      { color: "blue", number: 11 },
+      { color: "blue", number: 12 },
+    ]);
     const red3 = getTile(state, "p1", "red", 3);
     const red4 = getTile(state, "p1", "red", 4);
     const red5 = getTile(state, "p1", "red", 5);
@@ -271,6 +383,19 @@ describe("game engine", () => {
   test("game-over state rejects further moves", () => {
     let state = createTwoPlayerState();
 
+    state = setPlayerRackToSpecs(state, "p1", [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+      { color: "blue", number: 8 },
+      { color: "black", number: 8 },
+      { color: "orange", number: 8 },
+    ]);
+    state = setPlayerRackToSpecs(state, "p2", [
+      { color: "blue", number: 10 },
+      { color: "blue", number: 11 },
+      { color: "blue", number: 12 },
+    ]);
     const red3 = getTile(state, "p1", "red", 3);
     const red4 = getTile(state, "p1", "red", 4);
     const red5 = getTile(state, "p1", "red", 5);
@@ -310,7 +435,11 @@ describe("game engine", () => {
 
   test("rematch after finished game resets the room with same connected players", () => {
     let state = createTwoPlayerState();
-
+    state = setPlayerRackToSpecs(state, "p1", [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+    ]);
     const red3 = getTile(state, "p1", "red", 3);
     const red4 = getTile(state, "p1", "red", 4);
     const red5 = getTile(state, "p1", "red", 5);
@@ -435,5 +564,109 @@ describe("game engine", () => {
     expect(p1Rack).toHaveLength(14);
     expect(p2Rack).toHaveLength(14);
     expect(boardTiles).toHaveLength(0);
+  });
+  test("waiting-room leave removes player and migrates host", () => {
+    let state = createWaitingRoomState("ABCDE");
+
+    state = ensurePlayer(state, "p1");
+    state = ensurePlayer(state, "p2");
+
+    const result = leaveRoom(state, "p1");
+
+    expect(result.ok).toBe(true);
+    expect(result.shouldDeleteRoom).toBe(false);
+    expect(result.state.players).toHaveLength(1);
+    expect(result.state.players[0].id).toBe("p2");
+    expect(result.state.hostPlayerId).toBe("p2");
+  });
+
+  test("waiting-room last player leaving marks room for deletion", () => {
+    let state = createWaitingRoomState("ABCDE");
+
+    state = ensurePlayer(state, "p1");
+
+    const result = leaveRoom(state, "p1");
+
+    expect(result.ok).toBe(true);
+    expect(result.shouldDeleteRoom).toBe(true);
+    expect(result.state.players).toHaveLength(0);
+    expect(result.state.hostPlayerId).toBe(null);
+  });
+
+  test("active-game leave marks disconnected without removing rack and reconnects on ensure", () => {
+    let state = createWaitingRoomState("ABCDE");
+
+    state = ensurePlayer(state, "p1");
+    state = ensurePlayer(state, "p2");
+
+    let ready = setPlayerReady(state, "p1", true);
+    ready = setPlayerReady(ready.state, "p2", true);
+
+    const started = startGame(ready.state, "p1");
+    expect(started.ok).toBe(true);
+
+    state = started.state;
+
+    const p2RackBefore = state.tiles.filter(
+      (tile) => tile.ownerId === "p2" && tile.location === TILE_LOCATIONS.RACK,
+    );
+
+    const left = leaveRoom(state, "p2");
+
+    expect(left.ok).toBe(true);
+    expect(left.shouldDeleteRoom).toBe(false);
+
+    const p2AfterLeave = left.state.players.find(
+      (player) => player.id === "p2",
+    );
+    const p2RackAfterLeave = left.state.tiles.filter(
+      (tile) => tile.ownerId === "p2" && tile.location === TILE_LOCATIONS.RACK,
+    );
+
+    expect(p2AfterLeave.connected).toBe(false);
+    expect(p2AfterLeave.ready).toBe(false);
+    expect(p2RackAfterLeave).toHaveLength(p2RackBefore.length);
+
+    const rejoined = ensurePlayer(left.state, "p2");
+    const p2AfterRejoin = rejoined.players.find((player) => player.id === "p2");
+
+    expect(p2AfterRejoin.connected).toBe(true);
+    expect(
+      rejoined.players.filter((player) => player.id === "p2"),
+    ).toHaveLength(1);
+  });
+
+  test("finished-game leave marks disconnected and preserves finalScores", () => {
+    let state = createTwoPlayerState();
+
+    state = setPlayerRackToSpecs(state, "p1", [
+      { color: "red", number: 3 },
+      { color: "red", number: 4 },
+      { color: "red", number: 5 },
+    ]);
+
+    const red3 = getTile(state, "p1", "red", 3);
+    const red4 = getTile(state, "p1", "red", 4);
+    const red5 = getTile(state, "p1", "red", 5);
+
+    state = stripP1RackToOnly(state, [red3, red4, red5]);
+
+    state = playTile(state, "p1", red3, 56, 78);
+    state = playTile(state, "p1", red4, 112, 78);
+    state = playTile(state, "p1", red5, 168, 78);
+
+    const commit = commitTurn(state, "p1");
+    expect(commit.ok).toBe(true);
+    expect(commit.state.phase).toBe("finished");
+
+    const finalScores = commit.state.finalScores;
+    const left = leaveRoom(commit.state, "p2");
+
+    expect(left.ok).toBe(true);
+    expect(left.state.phase).toBe("finished");
+    expect(left.state.finalScores).toEqual(finalScores);
+
+    const p2 = left.state.players.find((player) => player.id === "p2");
+    expect(p2.connected).toBe(false);
   });
 });

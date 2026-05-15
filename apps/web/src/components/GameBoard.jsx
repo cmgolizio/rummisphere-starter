@@ -13,17 +13,20 @@ import {
 import { useGameStore } from "../lib/useGameStore";
 import Tile from "./Tile";
 
+const LONG_PRESS_MS = 900;
+
 export default function GameBoard() {
   const boardRef = useRef(null);
+  const holdTimerRef = useRef(null);
 
   const socket = useGameStore((state) => state.socket);
   const room = useGameStore((state) => state.room);
+  const playerId = useGameStore((state) => state.playerId);
   const drag = useGameStore((state) => state.drag);
   const setDrag = useGameStore((state) => state.setDrag);
   const setError = useGameStore((state) => state.setError);
 
   const tiles = room?.tiles || [];
-
   const boardTiles = tiles.filter(
     (tile) => tile.location === TILE_LOCATIONS.BOARD,
   );
@@ -31,41 +34,79 @@ export default function GameBoard() {
     (tile) => tile.location === TILE_LOCATIONS.RACK,
   );
 
-  const tileById = useMemo(() => {
-    return new Map(tiles.map((tile) => [tile.id, tile]));
-  }, [tiles]);
+  const tileById = useMemo(
+    () => new Map(tiles.map((tile) => [tile.id, tile])),
+    [tiles],
+  );
 
   useEffect(() => {
     if (!drag) return;
 
     function handlePointerMove(event) {
       const board = boardRef.current;
-      const tile = tileById.get(drag.tileId);
-
-      if (!board || !tile) return;
+      if (!board) return;
 
       const rect = board.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
 
-      const nextX = event.clientX - rect.left - drag.offsetX;
-      const nextY = event.clientY - rect.top - drag.offsetY;
+      if (drag.groupTileIds?.length > 0) {
+        const groupTiles = drag.groupTileIds
+          .map((id) => tileById.get(id))
+          .filter(Boolean);
+
+        const anchorTile = tileById.get(drag.tileId);
+        if (!anchorTile) return;
+
+        const anchorNextX = pointerX - drag.offsetX;
+        const anchorNextY = pointerY - drag.offsetY;
+
+        const deltas = groupTiles.map((tile) => ({
+          tileId: tile.id,
+          x: tile.x + (anchorNextX - anchorTile.x),
+          y: tile.y + (anchorNextY - anchorTile.y),
+        }));
+        setDrag({
+          ...drag,
+          x: anchorNextX,
+          y: anchorNextY,
+          groupDeltas: deltas,
+        });
+        return;
+      }
 
       setDrag({
         ...drag,
-        x: nextX,
-        y: nextY,
+        x: pointerX - drag.offsetX,
+        y: pointerY - drag.offsetY,
       });
     }
 
     function handlePointerUp() {
-      const tile = tileById.get(drag.tileId);
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
 
-      if (!tile) {
+      if (drag.groupDeltas?.length > 0) {
+        drag.groupDeltas.forEach((entry) => {
+          const zone = getTileZoneFromPoint(entry.x, entry.y);
+          const snapped = snapTilePosition(entry.x, entry.y, zone);
+
+          socket?.emit(CLIENT_EVENTS.MOVE_TILE, {
+            roomId: room?.id,
+            tileId: entry.tileId,
+            x: snapped.x,
+            y: snapped.y,
+            zone,
+          });
+        });
         setDrag(null);
         return;
       }
 
-      const targetZone = getTileZoneFromPoint(drag.x, drag.y);
-      const snapped = snapTilePosition(drag.x, drag.y, targetZone);
+      const tile = tileById.get(drag.tileId);
+      if (!tile) return setDrag(null);
+
+      const zone = getTileZoneFromPoint(drag.x, drag.y);
+      const snapped = snapTilePosition(drag.x, drag.y, zone);
 
       socket?.emit(
         CLIENT_EVENTS.MOVE_TILE,
@@ -74,12 +115,11 @@ export default function GameBoard() {
           tileId: drag.tileId,
           x: snapped.x,
           y: snapped.y,
-          zone: targetZone,
+          zone,
         },
         (response) => {
-          if (!response?.ok) {
+          if (!response?.ok)
             setError(response?.reason || "Move rejected by server.");
-          }
         },
       );
 
@@ -95,58 +135,134 @@ export default function GameBoard() {
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [drag, setDrag, setError, socket, tileById]);
+  }, [drag, room?.id, setDrag, setError, socket, tileById]);
+
+  function computeContiguousRun(seedTile) {
+    const sameZoneRow = tiles
+      .filter(
+        (tile) => tile.location === seedTile.location && tile.y === seedTile.y,
+      )
+      .sort((a, b) => a.x - b.x);
+
+    const idx = sameZoneRow.findIndex((tile) => tile.id === seedTile.id);
+    if (idx === -1) return [seedTile.id];
+
+    const ids = [seedTile.id];
+
+    for (let i = idx - 1; i >= 0; i -= 1) {
+      if (sameZoneRow[i + 1].x - sameZoneRow[i].x !== BOARD.cellWidth) break;
+      ids.unshift(sameZoneRow[i].id);
+    }
+
+    for (let i = idx + 1; i < sameZoneRow.length; i += 1) {
+      if (sameZoneRow[i].x - sameZoneRow[i - 1].x !== BOARD.cellWidth) break;
+      ids.push(sameZoneRow[i].id);
+    }
+
+    return ids;
+  }
 
   function handleTilePointerDown(event, tile) {
     if (event.button !== 0) return;
-    if (!room?.isYourTurn) return;
-    if (room?.phase !== "playing") return;
+    if (!room?.isYourTurn || room?.phase !== "playing") return;
 
     event.preventDefault();
-
     const board = boardRef.current;
-
     if (!board) return;
 
     const rect = board.getBoundingClientRect();
-
     const pointerX = event.clientX - rect.left;
     const pointerY = event.clientY - rect.top;
 
-    setDrag({
+    const baseDrag = {
       tileId: tile.id,
       offsetX: pointerX - tile.x,
       offsetY: pointerY - tile.y,
       x: tile.x,
       y: tile.y,
+      groupTileIds: [],
+      groupDeltas: [],
+    };
+
+    setDrag(baseDrag);
+
+    holdTimerRef.current = setTimeout(() => {
+      const runIds = computeContiguousRun(tile);
+      if (runIds.length <= 1) return;
+      setDrag({ ...baseDrag, groupTileIds: runIds });
+    }, LONG_PRESS_MS);
+  }
+
+  function handleSortRack(mode) {
+    if (!room || room.phase !== "playing" || !room.isYourTurn) return;
+
+    const ownRack = rackTiles.filter((tile) => tile.ownerId === playerId);
+    const colorRank = { red: 0, blue: 1, black: 2, orange: 3 };
+    const sorted = [...ownRack].sort((a, b) => {
+      if (a.joker && !b.joker) return 1;
+      if (!a.joker && b.joker) return -1;
+      if (mode === "123") {
+        const c = (colorRank[a.color] ?? 99) - (colorRank[b.color] ?? 99);
+        return c !== 0 ? c : (a.number ?? 99) - (b.number ?? 99);
+      }
+      const n = (a.number ?? 99) - (b.number ?? 99);
+      return n !== 0
+        ? n
+        : (colorRank[a.color] ?? 99) - (colorRank[b.color] ?? 99);
+    });
+
+    sorted.forEach((tile, index) => {
+      const columns = Math.floor(
+        (RACK.width - BOARD.tileWidth) / BOARD.cellWidth,
+      );
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+
+      socket?.emit(CLIENT_EVENTS.MOVE_TILE, {
+        roomId: room.id,
+        tileId: tile.id,
+        x: BOARD.cellWidth * (column + 1),
+        y: RACK.y + row * BOARD.cellHeight,
+        zone: TILE_LOCATIONS.RACK,
+      });
     });
   }
 
-  return (
-    <section className='rounded-3xl border border-white/10 bg-slate-900/80 p-4 shadow-2xl shadow-black/40'>
-      <div className='mb-3 flex flex-col justify-between gap-2 text-sm text-slate-300 sm:flex-row'>
-        <p>
-          Drag rack tiles onto the table. Board/table tiles are public. Rack
-          tiles are private to each player.
-        </p>
+  const highlighted = new Set(room?.highlightedTileIds || []);
 
+  return (
+    <section className='rounded-2xl border border-white/10 bg-slate-900/80 p-3 shadow-xl shadow-black/30'>
+      <div className='mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300'>
         <p>
-          Table: {boardTiles.length} tiles · Your rack: {rackTiles.length} tiles
+          Drag rack tiles onto the table. Hold press on first tile of a run to
+          move grouped tiles.
         </p>
+        <p>
+          Table: {boardTiles.length} · Rack: {rackTiles.length}
+        </p>
+        <div className='flex gap-2'>
+          <button
+            type='button'
+            onClick={() => handleSortRack("123")}
+            className='rounded-lg border border-cyan-300/30 px-2 py-1 font-bold'
+          >
+            123
+          </button>
+          <button
+            type='button'
+            onClick={() => handleSortRack("333")}
+            className='rounded-lg border border-cyan-300/30 px-2 py-1 font-bold'
+          >
+            333
+          </button>
+        </div>
       </div>
 
-      <div className='overflow-auto rounded-2xl border border-cyan-300/10 bg-slate-950 p-3'>
+      <div className='overflow-hidden rounded-2xl border border-cyan-300/10 bg-slate-950 p-2'>
         <div
           ref={boardRef}
           className='relative touch-none select-none overflow-hidden rounded-2xl border border-white/10'
-          style={{
-            width: BOARD.width,
-            height: BOARD.height,
-            backgroundColor: "#0f172a",
-            backgroundImage:
-              "linear-gradient(to right, rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px)",
-            backgroundSize: `${BOARD.cellWidth}px ${BOARD.cellHeight}px`,
-          }}
+          style={{ width: BOARD.width, height: BOARD.height }}
         >
           <div
             className='absolute rounded-2xl border border-emerald-300/20 bg-emerald-400/[0.03]'
@@ -156,12 +272,7 @@ export default function GameBoard() {
               width: TABLE.width,
               height: TABLE.height,
             }}
-          >
-            <div className='absolute left-4 top-3 rounded-full border border-emerald-300/20 bg-slate-950/70 px-3 py-1 text-xs uppercase tracking-[0.25em] text-emerald-200'>
-              Table
-            </div>
-          </div>
-
+          />
           <div
             className='absolute rounded-2xl border border-cyan-300/30 bg-cyan-400/[0.06]'
             style={{
@@ -170,26 +281,24 @@ export default function GameBoard() {
               width: RACK.width,
               height: RACK.height,
             }}
-          >
-            <div className='absolute left-4 top-3 rounded-full border border-cyan-300/20 bg-slate-950/70 px-3 py-1 text-xs uppercase tracking-[0.25em] text-cyan-200'>
-              Your rack
-            </div>
-          </div>
+          />
 
           {tiles.map((tile) => {
-            const isDragging = drag?.tileId === tile.id;
-            const renderTile = isDragging
-              ? {
-                  ...tile,
-                  x: drag.x,
-                  y: drag.y,
-                }
-              : tile;
+            const preview = drag?.groupDeltas?.find(
+              (entry) => entry.tileId === tile.id,
+            );
+            const isDragging = drag?.tileId === tile.id || Boolean(preview);
+            const renderTile = preview
+              ? { ...tile, x: preview.x, y: preview.y }
+              : isDragging && drag?.tileId === tile.id
+                ? { ...tile, x: drag.x, y: drag.y }
+                : tile;
 
             return (
               <Tile
                 key={tile.id}
                 tile={renderTile}
+                highlighted={highlighted.has(tile.id)}
                 isDragging={isDragging}
                 onPointerDown={(event) => handleTilePointerDown(event, tile)}
               />

@@ -48,6 +48,12 @@ export function getLastRoomId() {
   return window.localStorage.getItem(LAST_ROOM_ID_KEY) || "";
 }
 
+export function clearLastRoomId() {
+  if (typeof window === "undefined") return;
+
+  window.localStorage.removeItem(LAST_ROOM_ID_KEY);
+}
+
 export function saveLastRoomId(roomId) {
   if (typeof window === "undefined") return;
 

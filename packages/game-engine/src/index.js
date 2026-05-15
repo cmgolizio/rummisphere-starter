@@ -51,6 +51,8 @@ export function createWaitingRoomState(roomId) {
       startedAt: null,
       snapshotTiles: null,
     },
+    highlightedTileIds: [],
+    highlightOwnerId: null,
     lastError: null,
     updatedAt: Date.now(),
   };
@@ -75,6 +77,8 @@ export function createDemoGameState() {
       startedAt: null,
       snapshotTiles: null,
     },
+    highlightedTileIds: [],
+    highlightOwnerId: null,
     lastError: null,
     updatedAt: Date.now(),
   };
@@ -287,6 +291,42 @@ export function setPlayerConnected(state, playerId, connected) {
   };
 }
 
+export function leaveRoom(state, playerId) {
+  const player = getPlayer(state, playerId);
+
+  if (!player) {
+    return fail("Unknown player.");
+  }
+
+  if (state.phase === "waiting") {
+    const remainingPlayers = state.players.filter(
+      (candidate) => candidate.id !== playerId,
+    );
+    const nextHost =
+      remainingPlayers.find((candidate) => candidate.connected)?.id || null;
+
+    return {
+      ok: true,
+      shouldDeleteRoom: remainingPlayers.length === 0,
+      state: {
+        ...state,
+        players: remainingPlayers,
+        hostPlayerId: nextHost,
+        version: state.version + 1,
+        updatedAt: Date.now(),
+      },
+    };
+  }
+
+  const nextState = setPlayerConnected(state, playerId, false);
+
+  return {
+    ok: true,
+    shouldDeleteRoom: false,
+    state: nextState,
+  };
+}
+
 export function moveTile(state, playerId, input) {
   const player = getPlayer(state, playerId);
 
@@ -339,7 +379,52 @@ export function moveTile(state, playerId, input) {
     return fail("Move coordinates must be real numbers.");
   }
 
-  const finalPoint = snapTilePosition(rawX, rawY, targetZone);
+  let finalPoint = snapTilePosition(rawX, rawY, targetZone);
+
+  if (targetZone === TILE_LOCATIONS.BOARD && player.hasOpened) {
+    const adjacentTile = state.tiles.find((candidate) => {
+      if (candidate.id === tile.id) return false;
+      if (candidate.location !== TILE_LOCATIONS.BOARD) return false;
+      if (candidate.y !== finalPoint.y) return false;
+
+      return (
+        candidate.x === finalPoint.x - BOARD.cellWidth ||
+        candidate.x === finalPoint.x + BOARD.cellWidth
+      );
+    });
+
+    if (adjacentTile && !tile.joker && !adjacentTile.joker) {
+      const hasRunNeighbor = state.tiles.some((candidate) => {
+        if (candidate.id === adjacentTile.id) return false;
+        if (candidate.location !== TILE_LOCATIONS.BOARD) return false;
+        if (candidate.y !== adjacentTile.y) return false;
+        return (
+          candidate.x === adjacentTile.x - BOARD.cellWidth ||
+          candidate.x === adjacentTile.x + BOARD.cellWidth
+        );
+      });
+      if (!hasRunNeighbor) {
+        // no established run next to this tile, keep normal snap behavior
+      } else {
+        const expected =
+          finalPoint.x > adjacentTile.x
+            ? adjacentTile.number + 1
+            : adjacentTile.number - 1;
+        const isLogicalNeighbor =
+          tile.color === adjacentTile.color && tile.number === expected;
+
+        if (!isLogicalNeighbor) {
+          finalPoint = snapTilePosition(
+            finalPoint.x > adjacentTile.x
+              ? finalPoint.x + BOARD.cellWidth
+              : finalPoint.x - BOARD.cellWidth,
+            finalPoint.y,
+            targetZone,
+          );
+        }
+      }
+    }
+  }
 
   const blockedByTile = state.tiles.find((candidate) => {
     if (candidate.id === tile.id) return false;
@@ -441,6 +526,11 @@ export function commitTurn(state, playerId) {
         : candidate,
     ),
     lastError: null,
+    highlightedTileIds:
+      state.highlightOwnerId === playerId
+        ? []
+        : playedTiles.map((tile) => tile.id),
+    highlightOwnerId: state.highlightOwnerId === playerId ? null : playerId,
     version: state.version + 1,
     updatedAt: Date.now(),
   };
@@ -531,6 +621,8 @@ export function drawAndPass(state, playerId) {
     tiles: [...baseTiles, drawnTile],
     tilePool: remainingPool,
     lastError: null,
+    highlightedTileIds: [],
+    highlightOwnerId: null,
     version: state.version + 1,
     updatedAt: Date.now(),
   };
@@ -591,6 +683,8 @@ export function publicStateForPlayer(state, playerId) {
     })),
     tilePoolCount: state.tilePool?.length || 0,
     lastError: state.lastError,
+    highlightedTileIds: state.highlightedTileIds || [],
+    highlightOwnerId: state.highlightOwnerId || null,
     updatedAt: state.updatedAt,
   };
 }
@@ -869,7 +963,7 @@ function getTilesPlayedFromRackThisTurn(state, playerId) {
 function createDemoTilePool() {
   const pool = createFullTilePool();
 
-  return shuffleTilePool(pool, "rummisphere-demo-room");
+  return shuffleTilePool(pool);
 }
 
 function createFullTilePool() {
@@ -912,21 +1006,7 @@ function createFullTilePool() {
 
 function dealRackTilesForPlayer(playerId, playerIndex, tilePool) {
   const remainingPool = [...tilePool];
-  const selectedTemplates = [];
-
-  const starterPlan = getStarterRackPlan(playerIndex);
-
-  for (const wantedTile of starterPlan) {
-    const template = takeTileFromPool(remainingPool, wantedTile);
-
-    if (template) {
-      selectedTemplates.push(template);
-    }
-  }
-
-  while (selectedTemplates.length < 14 && remainingPool.length > 0) {
-    selectedTemplates.push(remainingPool.shift());
-  }
+  const selectedTemplates = remainingPool.splice(0, 14);
 
   const rackTiles = selectedTemplates.map((template, index) => {
     const position = getRackPositionByIndex(index);
@@ -947,47 +1027,6 @@ function dealRackTilesForPlayer(playerId, playerIndex, tilePool) {
     rackTiles,
     remainingPool,
   };
-}
-
-function getStarterRackPlan(playerIndex) {
-  const starterPlans = [
-    [
-      { color: "red", number: 3 },
-      { color: "red", number: 4 },
-      { color: "red", number: 5 },
-      { color: "blue", number: 8 },
-      { color: "black", number: 8 },
-      { color: "orange", number: 8 },
-    ],
-    [
-      { color: "blue", number: 10 },
-      { color: "blue", number: 11 },
-      { color: "blue", number: 12 },
-      { color: "red", number: 7 },
-      { color: "black", number: 7 },
-      { color: "orange", number: 7 },
-    ],
-  ];
-
-  return starterPlans[playerIndex % starterPlans.length];
-}
-
-function takeTileFromPool(pool, wantedTile) {
-  const index = pool.findIndex((tile) => {
-    if (wantedTile.joker) return tile.joker;
-
-    return (
-      !tile.joker &&
-      tile.color === wantedTile.color &&
-      tile.number === wantedTile.number
-    );
-  });
-
-  if (index === -1) return null;
-
-  const [template] = pool.splice(index, 1);
-
-  return template;
 }
 
 function getNextRackPosition(tiles, playerId) {
@@ -1129,6 +1168,8 @@ function createFreshGameWithExistingPlayers(previousState, firstPlayerId) {
       startedAt: null,
       snapshotTiles: null,
     },
+    highlightedTileIds: [],
+    highlightOwnerId: null,
     lastError: null,
     updatedAt: Date.now(),
   };
@@ -1166,12 +1207,11 @@ function deepCloneTiles(tiles) {
   return tiles.map((tile) => ({ ...tile }));
 }
 
-function shuffleTilePool(pool, seedText) {
+function shuffleTilePool(pool) {
   const shuffled = [...pool];
-  const random = seededRandom(seedText);
 
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
+    const swapIndex = Math.floor(Math.random() * (index + 1));
     const temp = shuffled[index];
 
     shuffled[index] = shuffled[swapIndex];
@@ -1179,26 +1219,6 @@ function shuffleTilePool(pool, seedText) {
   }
 
   return shuffled;
-}
-
-function seededRandom(seedText) {
-  let seed = 0;
-
-  for (let index = 0; index < seedText.length; index += 1) {
-    seed = Math.imul(31, seed) + seedText.charCodeAt(index);
-    seed |= 0;
-  }
-
-  return function random() {
-    seed = Math.imul(seed + 0x6d2b79f5, 1);
-    let value = seed;
-
-    value ^= value >>> 15;
-    value = Math.imul(value, value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 function createPlayerName(name, playerIndex) {

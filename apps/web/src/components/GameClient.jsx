@@ -6,6 +6,7 @@ import { CLIENT_EVENTS, SERVER_EVENTS } from "@rummisphere/shared";
 import { useGameStore } from "../lib/useGameStore";
 import GameBoard from "./GameBoard";
 import {
+  clearLastRoomId,
   getLastRoomId,
   getOrCreateClientIdentity,
   saveClientDisplayName,
@@ -32,6 +33,7 @@ export default function GameClient() {
   const setRoom = useGameStore((state) => state.setRoom);
   const setError = useGameStore((state) => state.setError);
   const clearError = useGameStore((state) => state.clearError);
+  const clearRoomState = useGameStore((state) => state.clearRoomState);
 
   useEffect(() => {
     const identity = getOrCreateClientIdentity();
@@ -252,6 +254,22 @@ export default function GameClient() {
     );
   }
 
+  function handleLeaveRoom() {
+    clearError();
+
+    socket?.emit(CLIENT_EVENTS.LEAVE_ROOM, { roomId: room?.id }, (response) => {
+      if (!response?.ok) {
+        setError(response?.reason || "Could not leave room.");
+        return;
+      }
+
+      clearLastRoomId();
+      setLastRoomId("");
+      setJoinCode("");
+      clearRoomState();
+    });
+  }
+
   function handleRematch() {
     clearError();
 
@@ -437,6 +455,15 @@ export default function GameClient() {
                 >
                   Start Game
                 </button>
+
+                <button
+                  type='button'
+                  disabled={!connected}
+                  onClick={handleLeaveRoom}
+                  className='rounded-xl border border-rose-300/30 bg-rose-300/10 px-4 py-2 font-bold text-rose-100 hover:bg-rose-300/15 disabled:cursor-not-allowed disabled:opacity-40'
+                >
+                  Leave Room
+                </button>
               </div>
             </div>
 
@@ -567,7 +594,7 @@ export default function GameClient() {
                 onClick={handleDrawAndPass}
                 className='rounded-xl bg-cyan-300 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40'
               >
-                Draw & Pass
+                Draw
               </button>
 
               <button
@@ -577,6 +604,15 @@ export default function GameClient() {
                 className='rounded-xl border border-white/10 bg-white/10 px-4 py-2 font-bold text-white hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40'
               >
                 Reset Turn
+              </button>
+
+              <button
+                type='button'
+                disabled={!connected}
+                onClick={handleLeaveRoom}
+                className='rounded-xl border border-rose-300/30 bg-rose-300/10 px-4 py-2 font-bold text-rose-100 hover:bg-rose-300/15 disabled:cursor-not-allowed disabled:opacity-40'
+              >
+                Leave Room
               </button>
             </div>
           </div>
@@ -591,14 +627,25 @@ export default function GameClient() {
                 Game over — {room?.winnerName || "Unknown player"} wins
               </h2>
 
-              <button
-                type='button'
-                disabled={!connected}
-                onClick={handleRematch}
-                className='rounded-xl bg-amber-300 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-black/20 disabled:cursor-not-allowed disabled:opacity-40'
-              >
-                Rematch
-              </button>
+              <div className='flex flex-wrap gap-2'>
+                <button
+                  type='button'
+                  disabled={!connected}
+                  onClick={handleRematch}
+                  className='rounded-xl bg-amber-300 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-black/20 disabled:cursor-not-allowed disabled:opacity-40'
+                >
+                  Rematch
+                </button>
+
+                <button
+                  type='button'
+                  disabled={!connected}
+                  onClick={handleLeaveRoom}
+                  className='rounded-xl border border-rose-300/30 bg-rose-300/10 px-4 py-2 font-bold text-rose-100 hover:bg-rose-300/15 disabled:cursor-not-allowed disabled:opacity-40'
+                >
+                  Leave Room
+                </button>
+              </div>
             </div>
 
             <div className='mt-4 overflow-hidden rounded-2xl border border-white/10'>

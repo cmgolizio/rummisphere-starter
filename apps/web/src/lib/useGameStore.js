@@ -20,4 +20,5 @@ export const useGameStore = create((set) => ({
   setDrag: (drag) => set({ drag }),
 
   clearError: () => set({ error: null }),
+  clearRoomState: () => set({ room: null, error: null }),
 }));

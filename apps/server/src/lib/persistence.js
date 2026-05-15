@@ -87,3 +87,19 @@ export async function logMatchMove({
     });
   }
 }
+
+export async function deleteRoomState(roomId) {
+  if (!supabase) return;
+
+  const { error } = await supabase
+    .from("matches")
+    .delete()
+    .eq("room_code", roomId);
+
+  if (error) {
+    console.error("[persistence] failed to delete room", {
+      roomId,
+      error: error.message,
+    });
+  }
+}

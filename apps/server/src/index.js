@@ -6,6 +6,7 @@ import {
   createWaitingRoomState,
   drawAndPass,
   ensurePlayer,
+  leaveRoom,
   moveTile,
   publicStateForPlayer,
   requestRematch,
@@ -16,6 +17,7 @@ import {
 } from "@rummisphere/game-engine";
 import { CLIENT_EVENTS, SERVER_EVENTS } from "@rummisphere/shared";
 import {
+  deleteRoomState,
   isPersistenceEnabled,
   loadRoomState,
   logMatchMove,
@@ -425,6 +427,57 @@ io.on("connection", (socket) => {
       ok: true,
       version: result.state.version,
     });
+  });
+  socket.on(CLIENT_EVENTS.LEAVE_ROOM, async (payload = {}, ack) => {
+    const roomId = getActiveRoomId(socket, payload);
+    const room = await getRoomById(roomId);
+    const playerId = getSocketPlayerId(socket);
+
+    if (!room) {
+      reject(socket, ack, "Room does not exist.");
+      return;
+    }
+
+    const result = leaveRoom(room, playerId);
+
+    if (!result.ok) {
+      reject(socket, ack, result.reason);
+      return;
+    }
+
+    socket.leave(roomId);
+    socket.data.roomId = null;
+
+    if (result.shouldDeleteRoom) {
+      rooms.delete(roomId);
+      await deleteRoomState(roomId);
+
+      await logMatchMove({
+        roomId,
+        playerId,
+        moveType: "room:leave",
+        payload: {},
+        resultingVersion: result.state.version,
+      });
+
+      ack?.({ ok: true, roomDeleted: true });
+      return;
+    }
+
+    rooms.set(roomId, result.state);
+
+    await saveRoomState(result.state);
+    await logMatchMove({
+      roomId,
+      playerId,
+      moveType: room.phase === "waiting" ? "room:leave" : "player:leave",
+      payload: {},
+      resultingVersion: result.state.version,
+    });
+
+    emitRoomState(roomId, result.state);
+
+    ack?.({ ok: true });
   });
 
   socket.on("disconnect", async () => {

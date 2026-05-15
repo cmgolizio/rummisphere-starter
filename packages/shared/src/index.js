@@ -31,6 +31,7 @@ export const TILE_LOCATIONS = Object.freeze({
 export const CLIENT_EVENTS = Object.freeze({
   CREATE_ROOM: "room:create",
   JOIN_ROOM: "room:join",
+  LEAVE_ROOM: "room:leave",
   SET_READY: "room:set-ready",
   START_GAME: "game:start",
 

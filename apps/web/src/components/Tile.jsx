@@ -9,7 +9,7 @@ const COLOR_CLASS = {
   orange: "text-orange-400 border-orange-200/40",
 };
 
-export default function Tile({ tile, isDragging, onPointerDown }) {
+export default function Tile({ tile, isDragging, highlighted, onPointerDown }) {
   const locationLabel =
     tile.location === TILE_LOCATIONS.RACK ? "rack" : "table";
 
@@ -23,7 +23,7 @@ export default function Tile({ tile, isDragging, onPointerDown }) {
         isDragging
           ? "z-50 cursor-grabbing shadow-2xl shadow-cyan-300/30"
           : "z-10 hover:shadow-xl"
-      }`}
+      } ${highlighted ? "ring-2 ring-orange-400 shadow-orange-300/60" : ""}`}
       style={{
         width: BOARD.tileWidth,
         height: BOARD.tileHeight,
