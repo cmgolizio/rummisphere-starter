@@ -421,7 +421,9 @@ import {
 import { useGameStore } from "../lib/useGameStore";
 import Tile from "./Tile";
 
-const LONG_PRESS_MS = 900;
+const LONG_PRESS_MS = 1200;
+const GROUP_DRAG_CANCEL_DISTANCE_PX = 6;
+const SELECTED_TILE_SHIFT_PX = 10;
 
 export default function GameBoard() {
   const boardRef = useRef(null);
@@ -457,6 +459,30 @@ export default function GameBoard() {
       const rect = board.getBoundingClientRect();
       const pointerX = event.clientX - rect.left;
       const pointerY = event.clientY - rect.top;
+      const nextX = pointerX - drag.offsetX;
+      const nextY = pointerY - drag.offsetY;
+
+      if (drag.waitingForGroupDrag && !drag.groupTileIds?.length) {
+        const movedDistance = Math.hypot(
+          pointerX - drag.startPointerX,
+          pointerY - drag.startPointerY,
+        );
+
+        if (movedDistance > GROUP_DRAG_CANCEL_DISTANCE_PX) {
+          if (holdTimerRef.current) {
+            clearTimeout(holdTimerRef.current);
+            holdTimerRef.current = null;
+          }
+
+          setDrag({
+            ...drag,
+            waitingForGroupDrag: false,
+            x: nextX,
+            y: nextY,
+          });
+          return;
+        }
+      }
 
       if (drag.groupTileIds?.length > 0) {
         const groupTiles = drag.groupTileIds
@@ -466,18 +492,15 @@ export default function GameBoard() {
         const anchorTile = tileById.get(drag.tileId);
         if (!anchorTile) return;
 
-        const anchorNextX = pointerX - drag.offsetX;
-        const anchorNextY = pointerY - drag.offsetY;
-
         const deltas = groupTiles.map((tile) => ({
           tileId: tile.id,
-          x: tile.x + (anchorNextX - anchorTile.x),
-          y: tile.y + (anchorNextY - anchorTile.y),
+          x: tile.x + (nextX - anchorTile.x),
+          y: tile.y + (nextY - anchorTile.y),
         }));
         setDrag({
           ...drag,
-          x: anchorNextX,
-          y: anchorNextY,
+          x: nextX,
+          y: nextY,
           groupDeltas: deltas,
         });
         return;
@@ -485,27 +508,71 @@ export default function GameBoard() {
 
       setDrag({
         ...drag,
-        x: pointerX - drag.offsetX,
-        y: pointerY - drag.offsetY,
+        x: nextX,
+        y: nextY,
       });
     }
 
-    function handlePointerUp() {
-      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    async function handlePointerUp() {
+      if (holdTimerRef.current) {
+        clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
 
       if (drag.groupDeltas?.length > 0) {
-        drag.groupDeltas.forEach((entry) => {
+        const sortedDeltas = [...drag.groupDeltas];
+        const anchorTile = tileById.get(drag.tileId);
+        const anchorDelta = sortedDeltas.find(
+          (entry) => entry.tileId === drag.tileId,
+        );
+
+        if (anchorTile && anchorDelta) {
+          const deltaX = anchorDelta.x - anchorTile.x;
+          const deltaY = anchorDelta.y - anchorTile.y;
+          const axis = Math.abs(deltaX) >= Math.abs(deltaY) ? "x" : "y";
+          const direction = axis === "x" ? deltaX : deltaY;
+
+          sortedDeltas.sort((a, b) => {
+            const tileA = tileById.get(a.tileId);
+            const tileB = tileById.get(b.tileId);
+            const originalA = tileA?.[axis] ?? a[axis];
+            const originalB = tileB?.[axis] ?? b[axis];
+
+            return direction >= 0
+              ? originalB - originalA
+              : originalA - originalB;
+          });
+        }
+
+        for (const entry of sortedDeltas) {
           const zone = getTileZoneFromPoint(entry.x, entry.y);
           const snapped = snapTilePosition(entry.x, entry.y, zone);
 
-          socket?.emit(CLIENT_EVENTS.MOVE_TILE, {
-            roomId: room?.id,
-            tileId: entry.tileId,
-            x: snapped.x,
-            y: snapped.y,
-            zone,
+          const accepted = await new Promise((resolve) => {
+            socket?.emit(
+              CLIENT_EVENTS.MOVE_TILE,
+              {
+                roomId: room?.id,
+                tileId: entry.tileId,
+                x: snapped.x,
+                y: snapped.y,
+                zone,
+              },
+              (response) => {
+                if (!response?.ok) {
+                  setError(response?.reason || "Move rejected by server.");
+                  resolve(false);
+                  return;
+                }
+
+                resolve(true);
+              },
+            );
           });
-        });
+
+          if (!accepted) break;
+        }
+
         setDrag(null);
         return;
       }
@@ -547,9 +614,16 @@ export default function GameBoard() {
 
   function computeContiguousRun(seedTile) {
     const sameZoneRow = tiles
-      .filter(
-        (tile) => tile.location === seedTile.location && tile.y === seedTile.y,
-      )
+      .filter((tile) => {
+        if (tile.location !== seedTile.location) return false;
+        if (tile.y !== seedTile.y) return false;
+
+        if (tile.location === TILE_LOCATIONS.RACK) {
+          return tile.ownerId === seedTile.ownerId;
+        }
+
+        return true;
+      })
       .sort((a, b) => a.x - b.x);
 
     const idx = sameZoneRow.findIndex((tile) => tile.id === seedTile.id);
@@ -567,7 +641,58 @@ export default function GameBoard() {
       ids.push(sameZoneRow[i].id);
     }
 
+    if (ids[0] !== seedTile.id) return [seedTile.id];
+
+    const runTiles = ids.map((id) => tileById.get(id)).filter(Boolean);
+    if (!isValidOrderedRun(runTiles)) return [seedTile.id];
+
     return ids;
+  }
+
+  function isValidOrderedRun(runTiles) {
+    if (runTiles.length < 3) return false;
+
+    const nonJokers = runTiles.filter((tile) => !tile.joker);
+    if (nonJokers.length === 0) return true;
+
+    const color = nonJokers[0].color;
+
+    if (!nonJokers.every((tile) => tile.color === color)) {
+      return false;
+    }
+
+    let firstNumber = null;
+
+    for (let index = 0; index < runTiles.length; index += 1) {
+      const tile = runTiles[index];
+      if (tile.joker) continue;
+
+      const number = Number(tile.number);
+      if (!Number.isFinite(number)) return false;
+
+      const possibleFirstNumber = number - index;
+
+      if (firstNumber === null) {
+        firstNumber = possibleFirstNumber;
+      }
+
+      if (possibleFirstNumber !== firstNumber) {
+        return false;
+      }
+    }
+
+    return firstNumber >= 1 && firstNumber + runTiles.length - 1 <= 13;
+  }
+
+  function getGroupDeltas(runIds, anchorTile, anchorX, anchorY) {
+    return runIds
+      .map((id) => tileById.get(id))
+      .filter(Boolean)
+      .map((tile) => ({
+        tileId: tile.id,
+        x: tile.x + (anchorX - anchorTile.x),
+        y: tile.y + (anchorY - anchorTile.y),
+      }));
   }
 
   function handleTilePointerDown(event, tile) {
@@ -586,6 +711,9 @@ export default function GameBoard() {
       tileId: tile.id,
       offsetX: pointerX - tile.x,
       offsetY: pointerY - tile.y,
+      startPointerX: pointerX,
+      startPointerY: pointerY,
+      waitingForGroupDrag: true,
       x: tile.x,
       y: tile.y,
       groupTileIds: [],
@@ -595,9 +723,32 @@ export default function GameBoard() {
     setDrag(baseDrag);
 
     holdTimerRef.current = setTimeout(() => {
+      const currentDrag = useGameStore.getState().drag;
+
+      if (
+        !currentDrag ||
+        currentDrag.tileId !== tile.id ||
+        !currentDrag.waitingForGroupDrag
+      ) {
+        return;
+      }
+
       const runIds = computeContiguousRun(tile);
-      if (runIds.length <= 1) return;
-      setDrag({ ...baseDrag, groupTileIds: runIds });
+
+      if (runIds.length <= 1) {
+        setDrag({
+          ...currentDrag,
+          waitingForGroupDrag: false,
+        });
+        return;
+      }
+
+      setDrag({
+        ...currentDrag,
+        waitingForGroupDrag: false,
+        groupTileIds: runIds,
+        groupDeltas: getGroupDeltas(runIds, tile, currentDrag.x, currentDrag.y),
+      });
     }, LONG_PRESS_MS);
   }
 
@@ -677,12 +828,23 @@ export default function GameBoard() {
             const preview = drag?.groupDeltas?.find(
               (entry) => entry.tileId === tile.id,
             );
-            const isDragging = drag?.tileId === tile.id || Boolean(preview);
+            const isGroupTile = drag?.groupTileIds?.includes(tile.id);
+            const isDragging =
+              drag?.tileId === tile.id || Boolean(preview) || isGroupTile;
+            const shouldShift =
+              isDragging &&
+              (drag?.waitingForGroupDrag || drag?.groupTileIds?.length > 0);
             const renderTile = preview
-              ? { ...tile, x: preview.x, y: preview.y }
+              ? { ...tile, x: preview.x, y: preview.y - SELECTED_TILE_SHIFT_PX }
               : isDragging && drag?.tileId === tile.id
-                ? { ...tile, x: drag.x, y: drag.y }
-                : tile;
+                ? {
+                    ...tile,
+                    x: drag.x,
+                    y: shouldShift ? drag.y - SELECTED_TILE_SHIFT_PX : drag.y,
+                  }
+                : isGroupTile && shouldShift
+                  ? { ...tile, y: tile.y - SELECTED_TILE_SHIFT_PX }
+                  : tile;
 
             return (
               <Tile
