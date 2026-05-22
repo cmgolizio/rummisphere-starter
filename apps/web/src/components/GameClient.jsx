@@ -20,6 +20,7 @@ export default function GameClient() {
   const [joinCode, setJoinCode] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [lastRoomId, setLastRoomId] = useState("");
+  const [headerIsExpanded, setHeaderIsExpanded] = useState(false);
 
   const socket = useGameStore((state) => state.socket);
   const connected = useGameStore((state) => state.connected);
@@ -286,6 +287,10 @@ export default function GameClient() {
     );
   }
 
+  const handleToggleHeader = () => {
+    setHeaderIsExpanded((expanded) => !expanded);
+  };
+
   if (!room) {
     return (
       <main className='min-h-screen bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 lg:px-8'>
@@ -401,7 +406,7 @@ export default function GameClient() {
             <div className='mt-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'>
               <div>
                 <h1 className='text-4xl font-black tracking-tight sm:text-6xl'>
-                  Room {room.id}
+                  Room ID: {room.id}
                 </h1>
 
                 <p className='mt-2 text-slate-300'>
@@ -514,7 +519,7 @@ export default function GameClient() {
 
             {isHost && !canStartGame ? (
               <p className='mt-4 text-sm text-slate-400'>
-                Need 2–4 connected players and everyone must be ready.
+                Need 2 to 4 connected players and everyone must be ready.
               </p>
             ) : null}
           </section>
@@ -526,86 +531,84 @@ export default function GameClient() {
   return (
     <main className='min-h-screen bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 lg:px-8'>
       <div className='mx-auto flex max-w-7xl flex-col gap-5'>
-        <header className='flex flex-col gap-4 rounded-3xl border border-white/10 bg-white/[0.04] p-5 shadow-2xl shadow-black/30 lg:flex-row lg:items-end lg:justify-between'>
-          <div>
-            <p className='text-sm uppercase tracking-[0.35em] text-cyan-300'>
-              Rummisphere · Room {room.id}
-            </p>
-
-            <h1 className='mt-2 text-3xl font-black tracking-tight sm:text-5xl'>
-              Real-time Rummikub
-            </h1>
-
-            <p className='mt-2 max-w-2xl text-sm text-slate-300 sm:text-base'>
-              Drag tiles during your turn. End turn only succeeds if the server
-              validates the table and your opening meld rules.
-            </p>
-          </div>
-
-          <div className='grid gap-3 rounded-2xl border border-white/10 bg-slate-900/80 p-4 text-sm text-slate-300 sm:grid-cols-2 lg:min-w-[460px]'>
+        {headerIsExpanded ? (
+          <header className='flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 shadow-lg shadow-black/20 lg:flex-row lg:items-center lg:justify-between'>
             <div>
-              <div>
-                Status:{" "}
-                {connected ? (
-                  <span className='text-emerald-300'>connected</span>
-                ) : (
-                  <span className='text-rose-300'>offline</span>
-                )}
-              </div>
+              <p className='text-sm uppercase tracking-[0.35em] text-cyan-300'>
+                Rummisphere · Room {room.id}
+              </p>
 
-              <div>Player: {currentPlayer?.name || "joining..."}</div>
-              <div>Room version: {room?.version || "—"}</div>
+              <h1 className='mt-1 text-xl font-bold tracking-tight sm:text-2xl'>
+                Welcome to the Rummiverse!
+              </h1>
+
+              <p className='mt-2 max-w-2xl text-sm text-slate-300 sm:text-base'>
+                Drag tiles during your turn. End turn only succeeds if the
+                server validates the table and your opening meld rules.
+              </p>
             </div>
-
-            <div>
-              <div>Turn: {room?.turnNumber || 1}</div>
-              <div>Pool: {room?.tilePoolCount ?? "—"} tiles</div>
-
+            <div className='grid gap-3 rounded-2xl border border-white/10 bg-slate-900/80 p-4 text-sm text-slate-300 sm:grid-cols-2 lg:min-w-[460px]'>
               <div>
-                Opened:{" "}
-                {hasOpened ? (
-                  <span className='text-emerald-300'>yes</span>
-                ) : (
-                  <span className='text-amber-300'>needs 30+</span>
-                )}
+                <div>
+                  Status:{" "}
+                  {connected ? (
+                    <span className='text-emerald-300'>connected</span>
+                  ) : (
+                    <span className='text-rose-300'>offline</span>
+                  )}
+                </div>
+
+                <div>Player: {currentPlayer?.name || "joining..."}</div>
+                <div>Room version: {room?.version || "—"}</div>
               </div>
 
               <div>
-                Current turn:{" "}
-                <span className={isYourTurn ? "text-emerald-300" : ""}>
-                  {isYourTurn ? "You" : currentTurnPlayer?.name || "waiting..."}
-                </span>
+                <div>Turn: {room?.turnNumber || 1}</div>
+                <div>Pool: {room?.tilePoolCount ?? "—"} tiles</div>
+
+                <div>
+                  Opened:{" "}
+                  {hasOpened ? (
+                    <span className='text-emerald-300'>yes</span>
+                  ) : (
+                    <span className='text-amber-300'>needs 30+</span>
+                  )}
+                </div>
+
+                <div>
+                  Current turn:{" "}
+                  <span className={isYourTurn ? "text-emerald-300" : ""}>
+                    {isYourTurn
+                      ? "You"
+                      : currentTurnPlayer?.name || "waiting..."}
+                  </span>
+                </div>
+              </div>
+              <div className='min-w-full w-100 flex flex-row items-center justify-between'>
+                <button
+                  type='button'
+                  disabled={!connected}
+                  onClick={handleLeaveRoom}
+                  className='rounded-lg border border-rose-300/25 bg-rose-300/10 px-3 py-1.5 text-xs font-semibold text-rose-100 hover:bg-rose-300/15 disabled:cursor-not-allowed disabled:opacity-40'
+                >
+                  Leave Room
+                </button>
+                <button
+                  type='button'
+                  aria-label='Expand details'
+                  title='Expand'
+                  className='text-red-100 text-xs'
+                  onClick={handleToggleHeader}
+                >
+                  close
+                </button>
               </div>
             </div>
-
-            <div className='flex flex-wrap gap-2 sm:col-span-2'>
-              <button
-                type='button'
-                disabled={!connected || !isYourTurn || isGameOver}
-                onClick={handleEndTurn}
-                className='rounded-xl bg-emerald-400 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-emerald-950/30 disabled:cursor-not-allowed disabled:opacity-40'
-              >
-                End Turn
-              </button>
-
-              <button
-                type='button'
-                disabled={!connected || !isYourTurn || isGameOver}
-                onClick={handleDrawAndPass}
-                className='rounded-xl bg-cyan-300 px-4 py-2 font-bold text-slate-950 shadow-lg shadow-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40'
-              >
-                Draw
-              </button>
-
-              <button
-                type='button'
-                disabled={!connected || !isYourTurn || isGameOver}
-                onClick={handleResetTurn}
-                className='rounded-xl border border-white/10 bg-white/10 px-4 py-2 font-bold text-white hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40'
-              >
-                Reset Turn
-              </button>
-
+          </header>
+        ) : (
+          <header className='flex flex-row items-center justify-end gap-5 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 shadow-lg shadow-black/20'>
+            <div className='min-w-screen h-10 flex flex-row gap-5 items-center justify-between'>
+              <h1>Welcome to the Rummiverse!</h1>
               <button
                 type='button'
                 disabled={!connected}
@@ -614,9 +617,18 @@ export default function GameClient() {
               >
                 Leave Room
               </button>
+              <button
+                type='button'
+                aria-label='Expand details'
+                title='Expand'
+                className='bg-transparent font-extrabold text-xl'
+                onClick={handleToggleHeader}
+              >
+                {"..."}
+              </button>
             </div>
-          </div>
-        </header>
+          </header>
+        )}
 
         {error ? <ErrorBox error={error} onDismiss={clearError} /> : null}
 
@@ -647,7 +659,6 @@ export default function GameClient() {
                 </button>
               </div>
             </div>
-
             <div className='mt-4 overflow-hidden rounded-2xl border border-white/10'>
               <table className='w-full text-left text-sm'>
                 <thead className='bg-white/10 text-slate-300'>
@@ -687,12 +698,38 @@ export default function GameClient() {
                     </tr>
                   ))}
                 </tbody>
+                <button
+                  type='button'
+                  aria-label='Expand details'
+                  title='Expand'
+                  className='bg-transparent font-extrabold text-xs absolute top-1/2 right-2'
+                  onClick={handleToggleHeader}
+                >
+                  close
+                </button>
               </table>
+            </div>
+
+            <div className='min-w-screen h-10 flex flex-row gap-5 items-center justify-between'>
+              <h1>Welcome to the Rummiverse!</h1>
+              <button
+                type='button'
+                disabled={!connected}
+                onClick={handleLeaveRoom}
+                className='rounded-xl border border-rose-300/30 bg-rose-300/10 px-4 py-2 font-bold text-rose-100 hover:bg-rose-300/15 disabled:cursor-not-allowed disabled:opacity-40'
+              >
+                Leave Room
+              </button>
             </div>
           </section>
         ) : null}
 
-        <GameBoard />
+        <GameBoard
+          onDraw={handleDrawAndPass}
+          onEndTurn={handleEndTurn}
+          onResetTurn={handleResetTurn}
+          canUseTurnActions={connected && isYourTurn && !isGameOver}
+        />
       </div>
     </main>
   );
